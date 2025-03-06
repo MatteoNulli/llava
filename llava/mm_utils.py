@@ -163,28 +163,65 @@ def expand2square(pil_img, background_color):
         return result
 
 
+# def process_images(images, image_processor, model_cfg):
+#     image_aspect_ratio = getattr(model_cfg, "image_aspect_ratio", None)
+#     new_images = []
+    
+#     if image_aspect_ratio == 'pad':
+#         for image in images:
+#             image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
+#             image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+#             new_images.append(image)
+#     elif image_aspect_ratio == "anyres":
+#         for image in images:
+#             image = process_anyres_image(image, image_processor, model_cfg.image_grid_pinpoints)
+#             new_images.append(image)
+#     else:
+#         # print("image_processor", image_processor)
+#         return image_processor(images, return_tensors='pt')['pixel_values']
+#     if all(x.shape == new_images[0].shape for x in new_images):
+#         new_images = torch.stack(new_images, dim=0)
+#     return new_images
+
+# multiple vision towers
 def process_images(images, image_processor, model_cfg):
-    image_aspect_ratio = getattr(model_cfg, "image_aspect_ratio", None)
-    new_images = []
-    if image_aspect_ratio == 'pad':
-        for image in images:
-            image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
-            image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            new_images.append(image)
-    elif image_aspect_ratio == "anyres":
-        for image in images:
-            image = process_anyres_image(image, image_processor, model_cfg.image_grid_pinpoints)
-            new_images.append(image)
-    else:
-        return image_processor(images, return_tensors='pt')['pixel_values']
-    if all(x.shape == new_images[0].shape for x in new_images):
-        new_images = torch.stack(new_images, dim=0)
-    return new_images
+    processor_aux_list = image_processor
+    new_images_aux_list = []
+    for image in images:
+        image_aux_list = []
+        if type(processor_aux_list) == list:
+            for processor_aux in processor_aux_list:
+                image_aux = image
+                if hasattr(processor_aux, 'image_mean'):
+                    target_resolution = processor_aux.crop_size['height']
+                    image_aux =  expand2square(image_aux, tuple(int(x*255) for x in processor_aux.image_mean)).resize((target_resolution, target_resolution))
+                image_aux = processor_aux.preprocess(image_aux, return_tensors='pt')['pixel_values'][0]
+                image_aux_list.append(image_aux)
+            new_images_aux_list.append(image_aux_list)
+        else:
+            processor_aux = processor_aux_list
+            image_aux = image
+            if hasattr(processor_aux, 'image_mean'):
+                target_resolution = processor_aux.crop_size['height']
+                image_aux =  expand2square(image_aux, tuple(int(x*255) for x in processor_aux.image_mean)).resize((target_resolution, target_resolution))
+            image_aux = processor_aux.preprocess(image_aux, return_tensors='pt')['pixel_values'][0]
+            image_aux_list.append(image_aux)
+            new_images_aux_list.append(image_aux_list)
+    new_images_aux_list = [list(batch_image_aux) for batch_image_aux in zip(*new_images_aux_list)]
+    new_images_aux_list = [torch.stack(image_aux).half().cuda() for image_aux in new_images_aux_list]
+    return new_images_aux_list
 
 
 def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, return_tensors=None):
+    """
+    Tokenizing the prompt and splitting it to add the IMAGE_TOKEN_INDEX to the place where the image token <image> was in the prompt. 
+    """
+    
     prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split('<image>')]
-
+    # print('prompt chunks tokenizer_image_token', prompt_chunks)
+    # print('tokenizer.decode(l) prompt chunks', [tokenizer.decode(l) for l in prompt_chunks])
+    
+    
     def insert_separator(X, sep):
         return [ele for sublist in zip(X, [sep]*len(X)) for ele in sublist][:-1]
 
@@ -192,15 +229,27 @@ def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX
     offset = 0
     if len(prompt_chunks) > 0 and len(prompt_chunks[0]) > 0 and prompt_chunks[0][0] == tokenizer.bos_token_id:
         offset = 1
-        input_ids.append(prompt_chunks[0][0])
+        input_ids.append(prompt_chunks[0][0]) 
+    
 
     for x in insert_separator(prompt_chunks, [image_token_index] * (offset + 1)):
+        # print('x', x)
         input_ids.extend(x[offset:])
+        # print('input_ids in loop', input_ids)
+    
+    # print('input_ids tokenize_image_token', input_ids)
+    l = [x for x in input_ids if x != -200]
 
+    # print('removed -200', l)
+    # print('tokenizer.decode(l)', tokenizer.decode(l))
     if return_tensors is not None:
         if return_tensors == 'pt':
             return torch.tensor(input_ids, dtype=torch.long)
         raise ValueError(f'Unsupported tensor type: {return_tensors}')
+
+    
+    # print('decoding chunks', [tokenizer.decode(x) for x in prompt_chunks])
+
     return input_ids
 
 

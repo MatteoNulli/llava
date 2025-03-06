@@ -26,6 +26,8 @@ class SimpleResBlock(nn.Module):
             nn.Linear(channels, channels)
         )
     def forward(self, x):
+        print('within projector forward')
+        print('input', x)
         x = self.pre_norm(x)
         return x + self.proj(x)
 

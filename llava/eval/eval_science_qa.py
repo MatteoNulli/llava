@@ -44,6 +44,8 @@ if __name__ == "__main__":
     problems = json.load(open(os.path.join(base_dir, "problems.json")))
     predictions = [json.loads(line) for line in open(args.result_file)]
     predictions = {pred['question_id']: pred for pred in predictions}
+
+    # print('predictions', predictions)
     split_problems = {idx: problems[idx] for idx in split_indices}
 
     results = {'correct': [], 'incorrect': []}
@@ -85,6 +87,7 @@ if __name__ == "__main__":
             'is_multimodal': '<image>' in pred['prompt'],
         }
 
+
         sqa_results['results'][prob_id] = get_pred_idx(answer, prob['choices'], args.options)
         sqa_results['outputs'][prob_id] = pred_text
 
@@ -102,12 +105,17 @@ if __name__ == "__main__":
     multimodal_total = multimodal_correct + multimodal_incorrect
     ###### IMG ######
 
+    print(total, multimodal_correct, multimodal_incorrect)
+
     print(f'Total: {total}, Correct: {correct}, Accuracy: {correct / total * 100:.2f}%, IMG-Accuracy: {multimodal_correct / multimodal_total * 100:.2f}%')
 
     sqa_results['acc'] = correct / total * 100
     sqa_results['correct'] = correct
     sqa_results['count'] = total
-
+    sqa_results['img-acc'] = multimodal_correct / multimodal_total * 100
+    
+    print('outfile', args.output_file)
+    print('resfile', args.output_result)
     with open(args.output_file, 'w') as f:
         json.dump(results, f, indent=2)
     with open(args.output_result, 'w') as f:

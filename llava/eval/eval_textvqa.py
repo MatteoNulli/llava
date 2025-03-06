@@ -34,21 +34,29 @@ def prompt_processor(prompt):
 
 def eval_single(annotation_file, result_file):
     experiment_name = os.path.splitext(os.path.basename(result_file))[0]
-    print(experiment_name)
+    # print(experiment_name)
     annotations = json.load(open(annotation_file))['data']
     annotations = {(annotation['image_id'], annotation['question'].lower()): annotation for annotation in annotations}
+    # for line in open(result_file):
+    #     print(line)
     results = [json.loads(line) for line in open(result_file)]
-
+    # print(result_file)
     pred_list = []
     for result in results:
         annotation = annotations[(result['question_id'], prompt_processor(result['prompt']))]
+        result['text'] = result['text'].strip('\n\n')
         pred_list.append({
             "pred_answer": result['text'],
             "gt_answers": annotation['answers'],
         })
+        # print("result['text']'", result['text'])
+        # print("annotation['answers']",  annotation['answers'])
+
+    
 
     evaluator = TextVQAAccuracyEvaluator()
     print('Samples: {}\nAccuracy: {:.2f}%\n'.format(len(pred_list), 100. * evaluator.eval_pred_list(pred_list)))
+    
 
 
 if __name__ == "__main__":
