@@ -1,0 +1,65 @@
+void setBuildStatus(String checkName, String message, String state) {
+    step([
+        $class: 'GitHubCommitStatusSetter',
+        reposSource: [$class: 'ManuallyEnteredRepositorySource', url: 'https://github.corp.ebay.com/computer-vision/iu-lmms-eval'],
+        contextSource: [$class: 'ManuallyEnteredCommitContextSource', context: checkName],
+        errorHandlers: [[$class: 'ChangingBuildStatusErrorHandler', result: 'UNSTABLE']],
+        statusResultSource: [ $class: 'ConditionalStatusResultSource', results: [[$class: 'AnyBuildResult', message: message, state: state]] ],
+        commitShaSource: [$class: 'ManuallyEnteredShaSource', sha: '${GITHUB_PR_HEAD_SHA}'],
+    ]);
+}
+
+void buildAndPushDockerImage(String destination) {
+    def status = sh(returnStatus: true, script: """
+        mkdir -p /home/jenkins/.docker
+        cp \$DOCKER_CONFIG_FILE /home/jenkins/.docker/config.json
+        sudo /kaniko/executor --context="\$(pwd)" --dockerfile=Dockerfile --destination="${destination}"
+    """)
+    if (status != 0) {
+        error('Docker image build failed')
+    }
+}
+
+pipeline {
+    agent { label 'kaniko-builder' }
+    environment {
+        DOCKER_CONFIG_FILE = credentials('jenkins-docker-config')
+    }
+    stages {
+        stage('Checkout'){
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: 'origin-pull/pull/${GITHUB_PR_NUMBER}/merge']],
+                    extensions: [[$class: 'ChangelogToBranch', options: [compareRemote: 'origin', compareTarget: '${GITHUB_PR_TARGET_BRANCH}']]],
+                    userRemoteConfigs: [[credentialsId: '7310b309-551f-4c00-ab53-3a742bf17514', name: 'origin', refspec: '+refs/pull/${GITHUB_PR_NUMBER}/merge:refs/remotes/origin-pull/pull/${GITHUB_PR_NUMBER}/merge', url: 'https://github.corp.ebay.com/computer-vision/iu-lmms-eval']]])
+            }
+        }
+        stage('Build and push Docker image sha tag') {
+            when {
+                anyOf {
+                    changeset 'Dockerfile'
+                    changeset 'requirements.txt'
+                }
+            }
+            steps {
+                buildAndPushDockerImage("hub.tess.io/image-understanding/lmms-eval:$GITHUB_PR_HEAD_SHA")
+            }
+        }
+    }
+
+    post {
+        success {
+            setBuildStatus(env.JOB_NAME, 'Pipeline completed successfully', 'SUCCESS');
+        }
+        unstable {
+            setBuildStatus(env.JOB_NAME, 'Pipeline unstable', 'UNSTABLE');
+        }
+        failure {
+            setBuildStatus(env.JOB_NAME, 'Pipeline failed', 'FAILURE');
+        }
+        changed {
+            setBuildStatus(env.JOB_NAME, 'Pipeline changed', 'CHANGED');
+        }
+    }
+}

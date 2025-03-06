@@ -1,0 +1,15 @@
+dataset_path: "arrow"
+dataset_kwargs:
+  data_dir: "/mnt/nushare2/data/mnulli/llava_ov/playground/lmms-lab___textvqa/default/0.0.0/9c0699cd19768ac5ab97568f6b3cbac4c0062884"
+task: textvqa_val
+test_split: validation
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+  - metric: submission
+    aggregation: !function utils.textvqa_aggregate_submissions
+    higher_is_better: true
+include: _default_template_textvqa_yaml

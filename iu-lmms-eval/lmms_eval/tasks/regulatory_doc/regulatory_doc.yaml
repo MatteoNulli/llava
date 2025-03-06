@@ -1,0 +1,83 @@
+dataset_path: "parquet"
+dataset_kwargs:
+    data_dir: "datasets/regulatory/doc/v2"
+task: "regulatory_doc"
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.regulatory_doc_to_visual
+doc_to_text: !function utils.regulatory_doc_to_text
+doc_to_target: !function utils.regulatory_doc_to_target
+generation_kwargs:
+  max_new_tokens: 300
+  temperature: 0
+  top_p: 0
+  num_beams: 1
+  do_sample: false
+  json_schema: '{"title": "Regulatory_DoC", "type": "object", "required": ["has_signature", "has_declaration", "has_address"], "properties": {"has_signature": {"type": "boolean"}, "has_declaration": {"type": "boolean"}, "has_address": {"type": "boolean"}}}'
+# The return value of process_results will be used by metrics
+process_results: !function utils.regulatory_process_results
+# Note that the metric name can be either a registed metric function (such as the case for GQA) or a key name returned by process_results
+metric_list:
+  - metric: declaration_page_precision
+    aggregation: !function utils.calculate_precision
+    higher_is_better: true
+  - metric: declaration_page_recall
+    aggregation: !function utils.calculate_recall
+    higher_is_better: true
+  - metric: declaration_page_f1
+    aggregation: !function utils.calculate_f1
+    higher_is_better: true
+  - metric: address_page_precision
+    aggregation: !function utils.calculate_precision
+    higher_is_better: true
+  - metric: address_page_recall
+    aggregation: !function utils.calculate_recall
+    higher_is_better: true
+  - metric: address_page_f1
+    aggregation: !function utils.calculate_f1
+    higher_is_better: true
+  - metric: signature_page_precision
+    aggregation: !function utils.calculate_precision
+    higher_is_better: true
+  - metric: signature_page_recall
+    aggregation: !function utils.calculate_recall
+    higher_is_better: true
+  - metric: signature_page_f1
+    aggregation: !function utils.calculate_f1
+    higher_is_better: true
+  - metric: declaration_doc_precision
+    aggregation: !function utils.calculate_aggregated_precision
+    higher_is_better: true
+  - metric: declaration_doc_recall
+    aggregation: !function utils.calculate_aggregated_recall
+    higher_is_better: true
+  - metric: declaration_doc_f1
+    aggregation: !function utils.calculate_aggregated_f1
+    higher_is_better: true
+  - metric: address_doc_precision
+    aggregation: !function utils.calculate_aggregated_precision
+    higher_is_better: true
+  - metric: address_doc_recall
+    aggregation: !function utils.calculate_aggregated_recall
+    higher_is_better: true
+  - metric: address_doc_f1
+    aggregation: !function utils.calculate_aggregated_f1
+    higher_is_better: true
+  - metric: signature_doc_precision
+    aggregation: !function utils.calculate_aggregated_precision
+    higher_is_better: true
+  - metric: signature_doc_recall
+    aggregation: !function utils.calculate_aggregated_recall
+    higher_is_better: true
+  - metric: signature_doc_f1
+    aggregation: !function utils.calculate_aggregated_f1
+    higher_is_better: true
+  - metric: json_validity_rate
+    aggregation: !function utils.json_validity_rate
+    higher_is_better: true
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ''
+    post_prompt: 'Please check the document for the following items and respond in the specified JSON format:\n1. Does the document have a handwritten signature on the bottom half of the document? (has_signature)\n2. Does the document title contain the phrase "Declaration of conformity" (case insensitive)? (has_declaration)\n   - Common incorrect titles include "Certificate of conformity" and "Attestation of complaints".\n3. Does the document have a proper address? (has_address)\n\nRespond only with the following JSON format and do not add anything more to the response: {"has_signature": true/false, "has_declaration": true/false, "has_address": true/false}'
+metadata:
+  - version: 0.1

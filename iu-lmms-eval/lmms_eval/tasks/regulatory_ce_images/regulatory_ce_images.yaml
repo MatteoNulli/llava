@@ -1,0 +1,47 @@
+dataset_path: "parquet"
+dataset_kwargs:
+    data_dir: "datasets/regulatory/ce_images/v2/"
+task: "regulatory_ce_images"
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.regulatory_doc_to_visual
+doc_to_text: !function utils.regulatory_doc_to_text
+doc_to_target: !function utils.regulatory_doc_to_target
+generation_kwargs:
+  max_new_tokens: 300
+  temperature: 0
+  top_p: 0
+  num_beams: 1
+  do_sample: false
+  json_schema: '{"title": "Regulatory_CE", "type": "object", "required": ["has_ce_marking", "has_ukca_marking"], "properties": {"has_ce_marking": {"type": "boolean"}, "has_ukca_marking": {"type": "boolean"}}}'
+# The return value of process_results will be used by metrics
+process_results: !function utils.regulatory_process_results
+# Note that the metric name can be either a registed metric function (such as the case for GQA) or a key name returned by process_results
+metric_list:
+  - metric: ce_marking_precision
+    aggregation: !function utils.calculate_precision
+    higher_is_better: true
+  - metric: ce_marking_recall
+    aggregation: !function utils.calculate_recall
+    higher_is_better: true
+  - metric: ce_marking_f1
+    aggregation: !function utils.calculate_f1
+    higher_is_better: true
+  - metric: ukca_marking_precision
+    aggregation: !function utils.calculate_precision
+    higher_is_better: true
+  - metric: ukca_marking_recall
+    aggregation: !function utils.calculate_recall
+    higher_is_better: true
+  - metric: ukca_marking_f1
+    aggregation: !function utils.calculate_f1
+    higher_is_better: true
+  - metric: json_validity_rate
+    aggregation: !function utils.json_validity_rate
+    higher_is_better: true
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ''
+    post_prompt: 'Please analyze the image provided and determine the presence of the following markings:\n1. CE marking\n2. UKCA marking\n\nBased on your analysis, respond only in the specified JSON format: {"has_ce_marking": true/false, "has_ukca_marking": true/false}\n\nEnsure that your response strictly adheres to the JSON structure and only includes the true or false values for each marking as requested.'
+metadata:
+  - version: 0.1
