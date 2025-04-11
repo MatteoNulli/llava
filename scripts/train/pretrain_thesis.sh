@@ -26,21 +26,22 @@ RANK=${RANK:-0}
 ADDR=${ADDR:-"127.0.0.1"}
 PORT=${PORT:-"29501"}
 NNODES=${NNODES:-1}
-NUM_GPUS=${NUM_GPUS:-2}
+NUM_GPUS=${NUM_GPUS:-8}
 
 export HF_DATASETS_OFFLINE=1
 
 
 MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
-RUN_NAME="todel-oldllavacodebase-Meta-Llama-3_1-8B-Instruct-openclip-bliplaion"
+BASE_RUN_NAME="8bs_globalviewmasking_oldllavacodebase-Meta-Llama-3_1-8B-Instruct-siglip2-so400m-patch16-512-bliplaion"
 DATA_DIR=/mnt/nushare2/data/mnulli/pretrainingdata
-SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${RUN_NAME}
+BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/$MODEL_NAME
-VIS_TOWER_DIR=/mnt/nushare2/data/baliao/multimodal/model_zoos
+VIS_TOWER_DIR=/mnt/nushare2/data/mnulli/model_zoos/siglip/models--google--siglip2-so400m-patch16-512/snapshots/ceea1cba8130d8271436da4828633198c176a775
+# VIS_TOWER_DIR=/mnt/nushare2/data/baliao/multimodal/model_zoos/openai/clip-vit-large-patch14-336
 
-TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
+# TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
-mkdir -p $SAVE_DIR
+# mkdir -p $BASE_SAVE_DIR
 
 cd /opt/krylov-workflow/src/run_fn_0/
 
@@ -50,18 +51,18 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --deepspeed scripts/zero3.json \
     --model_name_or_path $MODEL_DIR \
     --version llama3 \
-    --data_path $DATA_DIR/test_blip_laion_cc_sbu_558k.json \
+    --data_path $DATA_DIR/blip_laion_cc_sbu_558k.json \
     --image_folder $DATA_DIR/images \
-    --vision_tower $VIS_TOWER_DIR/openai/clip-vit-large-patch14-336 \
+    --vision_tower $VIS_TOWER_DIR \
     --mm_projector_type mlp2x_gelu \
     --tune_mm_mlp_adapter True \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --bf16 True \
-    --output_dir $SAVE_DIR \
+    --output_dir $BASE_SAVE_DIR \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 4 \
     --evaluation_strategy "no" \
@@ -80,4 +81,4 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --lazy_preprocess True \
     --report_to none \
     --sam2_masking_token True \
-    --overwrite_output_dir 2>&1 | tee $SAVE_DIR/out
+    --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out

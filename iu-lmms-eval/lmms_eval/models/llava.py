@@ -4,7 +4,9 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 
 import copy
+import os
 import warnings
+import numpy as np
 from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
@@ -25,7 +27,9 @@ from loguru import logger as eval_logger
 
 
 import sys
-sys.path.append('/data/chatgpt/notebooks/mnulli/LLaVA-NeXT')
+
+llava_pth = os.path.abspath(os.path.join(os.path.split(__file__)[0], "../../../"))  # -> /data/chatgpt/notebooks/mnulli/llava/iu-lmms-eval/lmms_eval/models/
+sys.path.append(f"{llava_pth}")
 
 try:
     from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
@@ -62,6 +66,7 @@ class Llava(lmms):
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
         model_name=None,
+        model_base: str = None,
         attn_implementation=best_fit_attn_implementation,
         device_map="cuda:0",
         conv_template="vicuna_v1",
@@ -91,6 +96,7 @@ class Llava(lmms):
         llava_model_args = {
             "multimodal": True,
         }
+
         if customized_config is not None:
             llava_model_args["customized_config"] = customized_config
         if attn_implementation is not None:
@@ -98,13 +104,14 @@ class Llava(lmms):
         if "use_flash_attention_2" in kwargs:
             llava_model_args["use_flash_attention_2"] = kwargs["use_flash_attention_2"]
         model_name = model_name if model_name is not None else get_model_name_from_path(pretrained)
+        self.model_base = model_base
         try:
             # Try to load the model with the multimodal argument
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, self.model_base, model_name, device_map=self.device_map, **llava_model_args)
         except TypeError:
             # for older versions of LLaVA that don't have multimodal argument
             llava_model_args.pop("multimodal", None)
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, self.model_base, model_name, device_map=self.device_map, **llava_model_args)
         self._config = self._model.config
         self.model.eval()
         if tie_weights:
@@ -288,6 +295,45 @@ class Llava(lmms):
                 new_list.append(j)
         return new_list
 
+    def read_mask_arrays(self, mask_files):
+        """
+        Read all mask arrays from a specified directory.
+
+        Args:
+        - mask_files: List of .npy mask files
+
+        Returns:
+        - List of loaded mask arrays
+        """
+        # Load masks
+        masks = [np.load(file) for file in mask_files]
+        return masks
+
+    def find_mask_files(self, base_dir, image_id):
+        """
+        Given an image_id, find its corresponding mask files in the partition directories.
+
+        Args:
+            base_dir (str): The root directory containing partition folders.
+            image_id (str): The image identifier in the format '00000/000000073.jpg'.
+
+        Returns:
+            list: A list of full paths to mask_n.npy files.
+        """
+        import glob
+
+        partitions = [os.path.join(base_dir, p) for p in os.listdir(base_dir) if p.startswith("partition_")]
+
+        for partition_dir in partitions:
+            # print("image_id", image_id)
+            image_path = os.path.join(partition_dir, image_id)
+            if os.path.exists(image_path) and os.path.isdir(image_path):
+                # Retrieve all mask_n.npy files
+                mask_files = sorted(glob.glob(os.path.join(image_path, "mask_*.npy")))
+                return mask_files  # Return the list of mask file paths
+
+        return []  # Return empty list if image_id is not found
+
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
 
@@ -311,8 +357,47 @@ class Llava(lmms):
         for chunk in chunks:
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
             task = task[0]
+
             split = split[0]
             batched_visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]  # [B, N]
+            if task == "cvbench":
+                base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/nyu-cvbench/arrays"
+                self.model.sam2_masking_token = True
+            elif task == "mmvp":
+                base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmvp/arrays"
+                self.model.sam2_masking_token = True
+            elif task == "mme":
+                base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mme/arrays"
+                self.model.sam2_masking_token = True
+            elif task == "mmstar":
+                base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmstar/arrays"
+                self.model.sam2_masking_token = True
+            else:
+                self.model.sam2_masking_token = False
+            if self.model.sam2_masking_token:
+                for idx, visual in enumerate(batched_visuals):
+                    image_id = visual[-1]
+
+                    print("visual", visual)
+
+                    mask_files = self.find_mask_files(
+                        base_dir=base_dir,
+                        image_id=image_id,
+                    )
+                    masks = self.read_mask_arrays(mask_files)
+                    print("len(masks)", len(masks))
+                    if len(masks) > 1:
+                        masks = [torch.from_numpy(mask_np).to(self.model.device) for mask_np in masks]
+                        masks = torch.stack(masks).unsqueeze(0)
+
+                        if masks.shape[1] < 30:
+                            self.model.sam2_masking_token = True
+                        else:
+                            self.model.sam2_masking_token = False
+                    else:
+                        self.model.sam2_masking_token = False
+
+            batched_visuals = [[batched_visuals[0][0]]]
             flattened_visuals = self.flatten(batched_visuals)  # [B*N]
             # we assume all gen kwargs in the batch are the same
             # this is safe to assume because the `grouper` object ensures it.
@@ -335,7 +420,11 @@ class Llava(lmms):
                 eval_logger.info(f"Setting image aspect ratio: {self._config.image_aspect_ratio}")
             # encode, pad, and truncate contexts for this batch
             if flattened_visuals:
-                image_tensor = process_images(flattened_visuals, self._image_processor, self._config)
+                try:
+                    image_tensor = process_images(flattened_visuals, self._image_processor, self._config)
+                except:
+                    raise ValueError("Issue processing this batch ... Continuing")
+                    continue
                 if type(image_tensor) is list:
                     image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
                 else:
@@ -382,6 +471,10 @@ class Llava(lmms):
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
 
+            # print("question_input", question_input)
+            # print("self.model.sam2_masking_token", self.model.sam2_masking_token)
+            # if "<image>" not in question_input[0]:
+            # print("question_input", question_input)
             input_ids_list = [tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt") for prompt in question_input]
             pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
             input_ids = self.pad_sequence(input_ids_list, batch_first=True, padding_value=pad_token_ids).to(self.device)
@@ -389,20 +482,37 @@ class Llava(lmms):
             # These steps are not in LLaVA's original code, but are necessary for generation to work
             # TODO: attention to this major generation step...
             try:
-                cont = self.model.generate(
-                    input_ids,
-                    attention_mask=attention_masks,
-                    pad_token_id=pad_token_ids,
-                    images=image_tensor,
-                    image_sizes=gen_kwargs["image_sizes"],
-                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                    temperature=gen_kwargs["temperature"],
-                    top_p=gen_kwargs["top_p"],
-                    num_beams=gen_kwargs["num_beams"],
-                    max_new_tokens=gen_kwargs["max_new_tokens"],
-                    use_cache=self.use_cache,
-                )
+                if self.model.sam2_masking_token:
+                    cont = self.model.generate(
+                        input_ids,
+                        attention_mask=attention_masks,
+                        pad_token_id=pad_token_ids,
+                        images=image_tensor,
+                        masks=masks,
+                        image_sizes=gen_kwargs["image_sizes"],
+                        do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                        temperature=gen_kwargs["temperature"],
+                        top_p=gen_kwargs["top_p"],
+                        num_beams=gen_kwargs["num_beams"],
+                        max_new_tokens=gen_kwargs["max_new_tokens"],
+                        use_cache=self.use_cache,
+                    )
+                else:
+                    cont = self.model.generate(
+                        input_ids,
+                        attention_mask=attention_masks,
+                        pad_token_id=pad_token_ids,
+                        images=image_tensor,
+                        image_sizes=gen_kwargs["image_sizes"],
+                        do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                        temperature=gen_kwargs["temperature"],
+                        top_p=gen_kwargs["top_p"],
+                        num_beams=gen_kwargs["num_beams"],
+                        max_new_tokens=gen_kwargs["max_new_tokens"],
+                        use_cache=self.use_cache,
+                    )
                 text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
+                # print("text_outputs", text_outputs)
             except Exception as e:
                 raise e
                 eval_logger.error(f"Error {e} in generating")

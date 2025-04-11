@@ -44,7 +44,8 @@ def mmbench_doc_to_visual(doc):
         return [doc["image"].convert("RGB")]
     except:
         # Opening the image in a different way... \n Image is probably in bytes, string or different format. \n'
-        return [Image.open(io.BytesIO(base64.b64decode(doc['image']))).convert('RGB')]
+        return [Image.open(io.BytesIO(base64.b64decode(doc["image"]))).convert("RGB")]
+
 
 def mmbench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     option_candidate = ["A", "B", "C", "D", "E"]
@@ -108,28 +109,28 @@ def mmbench_process_results(doc, results):
 def mmbench_aggregate_dev_results_eval(results, args):
     print(f"============= MMBench-EN(Dev) Detailed Results =============")
     overall_acc, category_acc, l2_category_acc = mmbench_evaluator.eval_result(results, eval_method="openai")
-    file = generate_submission_file("mmbench_en_dev_results.json", args)
+    # file = generate_submission_file("mmbench_en_dev_results.json", args)
     details_info = {
         "overall_acc": overall_acc,
         "category_acc": category_acc,
         "l2_category_acc": l2_category_acc,
     }
-    with open(file, "w") as f:
-        json.dump(details_info, f)
+    # with open(file, "w") as f:
+    #     json.dump(details_info, f)
     return overall_acc * 100
 
 
 def mmbench_aggregate_dev_results_submission(results, args):
     df = pd.DataFrame(results)
-    excel_write_path = generate_submission_file("mmbench_en_dev_results.xlsx", args)
-    with pd.ExcelWriter(excel_write_path) as writer:
-        df.to_excel(writer, index=False)
-    eval_logger.info(f"Saved results to {excel_write_path}")
+    # excel_write_path = generate_submission_file("mmbench_en_dev_results.xlsx", args)
+    # with pd.ExcelWriter(excel_write_path) as writer:
+    #     df.to_excel(writer, index=False)
+    # eval_logger.info(f"Saved results to {excel_write_path}")
 
 
 def mmbench_aggregate_test_results(results, args):
     df = pd.DataFrame(results)
-    excel_write_path = generate_submission_file("mmbench_en_test_results.xlsx", args)
-    with pd.ExcelWriter(excel_write_path) as writer:
-        df.to_excel(writer, index=False)
-    eval_logger.info(f"Saved results to {excel_write_path}")
+    # excel_write_path = generate_submission_file("mmbench_en_test_results.xlsx", args)
+    # with pd.ExcelWriter(excel_write_path) as writer:
+    #     df.to_excel(writer, index=False)
+    # eval_logger.info(f"Saved results to {excel_write_path}")

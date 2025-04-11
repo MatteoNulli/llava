@@ -13,6 +13,7 @@ logger.add(sys.stdout, level="WARNING")
 AVAILABLE_MODELS = {
     "auroracap": "AuroraCap",
     "batch_gpt4": "BatchGPT4",
+    "cambrian": "Cambrian",
     "claude": "Claude",
     "cogvlm2": "CogVLM2",
     "from_log": "FromLog",
@@ -64,7 +65,7 @@ AVAILABLE_MODELS = {
     "qwen_vl_iu": "Qwen_VL_IU",
     "tinyllava_iu": "TinyLlavaIU",
     "xcomposer2_iu": "XComposer2IU",
-    "xcomposer2d5_iu": "XComposer2d5IU"
+    "xcomposer2d5_iu": "XComposer2d5IU",
 }
 
 

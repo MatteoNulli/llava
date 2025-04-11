@@ -39,10 +39,10 @@ replace_prompt = " Please answer yes or no."
 
 def mme_doc_to_visual(doc):
     try:
-        return [doc["image"].convert("RGB")]
+        return [doc["image"].convert("RGB"), doc["question_id"]]
     except:
         # Opening the image in a different way... \n Image is probably in bytes, string or different format. \n'
-        return [Image.open(io.BytesIO(ast.literal_eval(doc['image'])['bytes'])).convert('RGB')]
+        return [Image.open(io.BytesIO(ast.literal_eval(doc["image"])["bytes"])).convert("RGB"), doc["question_id"]]
 
 
 def mme_doc_to_text(doc, lmms_eval_specific_kwargs=None):

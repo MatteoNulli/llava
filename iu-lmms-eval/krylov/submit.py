@@ -7,6 +7,9 @@ from pykrylov.util.consts import EXP_ID
 import subprocess
 
 root_dir = os.path.dirname(os.path.abspath(__file__))
+if "iu-lmms-eval/" in root_dir:
+    root_dir = os.path.abspath(os.path.join(root_dir, "..", ".."))
+
 MASTER_PORT = 2020
 
 
@@ -22,15 +25,9 @@ def init_krylov_context():
                 experiment_id,
                 runtime={"workflow": {"runId": os.environ["KRYLOV_WF_RUN_ID"]}},
             )
-        os.environ["TRANSFORMERS_CACHE"] = (
-            f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/hf_cache"
-        )
-        os.environ["TORCH_EXTENSIONS_DIR"] = (
-            f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/torch_cache"
-        )
-        os.environ["HF_MODULES_CACHE"] = (
-            f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/hf_module_cache"
-        )
+        os.environ["TRANSFORMERS_CACHE"] = f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/hf_cache"
+        os.environ["TORCH_EXTENSIONS_DIR"] = f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/torch_cache"
+        os.environ["HF_MODULES_CACHE"] = f"/data/{os.environ['KRYLOV_NAMESPACE']}/data/{os.environ['KRYLOV_PRINCIPAL']}/.llm_cache/hf_module_cache"
         return {
             "gpu_per_node": int(context["gpu_per_node"]),
             "num_nodes": int(context["num_nodes"]),
@@ -75,12 +72,8 @@ def run_fn():
 def submit_task():
     parser = argparse.ArgumentParser()
     parser.add_argument("script", help="Which script to run")
-    parser.add_argument(
-        "--ems_project", default="mnist-baliao", help="EMS project name"
-    )
-    parser.add_argument(
-        "--experiment_name", default="llama3-cpt", help="Experiment name"
-    )
+    parser.add_argument("--ems_project", default="mnist-baliao", help="EMS project name")
+    parser.add_argument("--experiment_name", default="llama3-cpt", help="Experiment name")
     parser.add_argument("--cluster", default="tess137", help="Krylov cluster")
     parser.add_argument("-n", "--namespace", default="chatgpt", type=str)
     parser.add_argument(
@@ -91,13 +84,9 @@ def submit_task():
     )
     parser.add_argument("--cpu", default=16, help="Use cpus")
     parser.add_argument("--memory", default=512, help="Use memory")
-    parser.add_argument(
-        "--gpu_per_node", default=1, type=int, help="How many GPUs per node"
-    )
+    parser.add_argument("--gpu_per_node", default=1, type=int, help="How many GPUs per node")
     parser.add_argument("--num_nodes", default=4, type=int, help="How many nodes")
-    parser.add_argument(
-        "--rack_name", default=None, type=str, help="Specify which rack to use"
-    )
+    parser.add_argument("--rack_name", default=None, type=str, help="Specify which rack to use")
     parser.add_argument("--pvc", action="store_true", help="Mount pvc")
     # parser.add_argument('--model', default='phase1_v0', help='Which model to run')
     args = parser.parse_args()
@@ -116,9 +105,7 @@ def submit_task():
         if experiment_name is None:
             experiment_name = "llm"
         if not args.cluster == "tess137":
-            experiment_id = pykrylov.ems.experiment.create_experiment(
-                args.ems_project, experiment_name
-            )
+            experiment_id = pykrylov.ems.experiment.create_experiment(args.ems_project, experiment_name)
 
     master_name = "llm_" + "".join(random.choices(string.ascii_letters, k=8))
     master_service_name = master_name + "_svc"
@@ -158,9 +145,7 @@ def submit_task():
     task.add_memory(args.memory)
     if args.gpu_per_node > 0:
         if args.cluster == "tess137":
-            task.add_execution_parameter(
-                "accelerator", {"type": "gpu", "quantity": str(args.gpu_per_node)}
-            )
+            task.add_execution_parameter("accelerator", {"type": "gpu", "quantity": str(args.gpu_per_node)})
             # task.run_on_gpu(args.gpu_per_node, model='a100')
         else:
             task.run_on_gpu(args.gpu_per_node)
@@ -176,8 +161,9 @@ def submit_task():
         # task.mount_pvc("mtrepo", "nlp-ebert-02", args.cluster)
         task.mount_pvc("nushare2", "krylov-user-pvc-nlp-01", args.cluster)
 
-    print('root_dir', root_dir)
-    task.add_directory(root_dir)
+    task.add_directory(os.path.join(root_dir, "iu-lmms-eval/"))
+    task.add_directory(os.path.join(root_dir, "scripts"))
+    task.add_directory(os.path.join(root_dir, "llava"))
     task.add_file(args.script)
 
     if args.cluster == "tess38":
@@ -203,22 +189,16 @@ def submit_task():
         from collections import OrderedDict
 
         workflow = pykrylov.Flow(task)
-        workflow.execution_parameters.add_execution_parameter(
-            "enableChooseCluster", "true"
-        )
+        workflow.execution_parameters.add_execution_parameter("enableChooseCluster", "true")
         # task.add_execution_parameter('enableChooseCluster', 'true')
 
     # specify rack
     if args.rack_name is not None:
-        task.add_execution_parameter(
-            "nodeSelector", {"failure-domain.tess.io/rack": args.rack_name}
-        )
+        task.add_execution_parameter("nodeSelector", {"failure-domain.tess.io/rack": args.rack_name})
 
     if args.cluster == "tess137":
         # TODO does it really return run_id or experiment_id?
-        run_id = pykrylov.Session(namespace=args.namespace).submit_experiment(
-            workflow, args.ems_project, args.experiment_name
-        )
+        run_id = pykrylov.Session(namespace=args.namespace).submit_experiment(workflow, args.ems_project, args.experiment_name)
     else:
         run_id = session.submit(task)
 
@@ -236,9 +216,7 @@ def submit_task():
     print(f"Submitted a task with run_id {run_id}")
     if experiment_id:
         link = f"https://{args.cluster[-2:]}.aihub.krylov.vip.ebay.com/projects/{args.ems_project}/experiments/{experiment_id}/info"
-        print(
-            f"You can monitor progress and download translation result by visiting {link}"
-        )
+        print(f"You can monitor progress and download translation result by visiting {link}")
 
 
 if __name__ == "__main__":

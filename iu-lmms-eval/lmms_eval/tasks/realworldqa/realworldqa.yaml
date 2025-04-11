@@ -1,5 +1,6 @@
-dataset_path: lmms-lab/RealWorldQA
+dataset_path: "arrow"
 dataset_kwargs:
+  data_dir: /mnt/nushare2/data/mnulli/llava_ov/playground/lmms-lab___real_world_qa/default/0.0.0/907c4e5228fd1703c710ed937601cb5f89ab8d5c
   token: True
 task: "realworldqa"
 test_split: test

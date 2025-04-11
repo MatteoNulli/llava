@@ -344,6 +344,12 @@ class LlavaHf(lmms):
                     pbar.update(1)
 
             if task_type == "image":
+                if len(visuals) > 1:
+                    visuals = [visuals[0]]
+
+                if len(visuals) == 1 and text.count("<image>") > 1:
+                    text = text.replace("<image>", "", 1)
+
                 inputs = self._image_processor(images=visuals, text=text, return_tensors="pt").to(self._device, self.model.dtype)
             elif task_type == "video":
                 inputs = self._image_processor(videos=visuals, text=text, return_tensors="pt").to(self._device, self.model.dtype)

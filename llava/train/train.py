@@ -21,7 +21,11 @@ from dataclasses import dataclass, field
 import json
 import logging
 import pathlib
+import yaml
+import math
 import numpy as np
+
+import pycocotools.mask as maskUtils
 from typing import Dict, Optional, Sequence, List
 
 import torch
@@ -644,6 +648,9 @@ def preprocess_llama3(
     conv = conversation_lib.default_conversation.copy()
     roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
 
+    tokenizer.pad_token = (
+        tokenizer.pad_token if hasattr(tokenizer, "pad_token") else tokenizer.eos_token
+    )
     # Apply prompt templates
     conversations = []
     for i, source in enumerate(sources):
@@ -1047,12 +1054,79 @@ class LazySupervisedDataset(Dataset):
         data_args: DataArguments,
     ):
         super(LazySupervisedDataset, self).__init__()
-        list_data_dict = json.load(open(data_path, "r"))
 
-        rank0_print("Formatting inputs...Skip in lazy mode")
-        self.tokenizer = tokenizer
-        self.list_data_dict = list_data_dict
-        self.data_args = data_args
+        # Handle multiple JSON files specified in the data_path
+        if data_path.endswith(".yaml"):
+            self.tokenizer = tokenizer
+            self.list_data_dict = []
+            self.data_args = data_args
+
+            with open(data_path, "r") as file:
+                yaml_data = yaml.safe_load(file)
+                datasets = yaml_data.get("datasets")
+                # file should be in the format of:
+                # datasets:
+                #   - json_path: xxxx1.json
+                #     sampling_strategy: first:1000
+                #   - json_path: xxxx2.json
+                #     sampling_strategy: end:3000
+                #   - json_path: xxxx3.json
+                #     sampling_strategy: random:999
+                data_args.dataset_paths = [
+                    dataset.get("json_path") for dataset in datasets
+                ]
+                for dataset in datasets:
+                    json_path = dataset.get("json_path")
+                    sampling_strategy = dataset.get("sampling_strategy", "all")
+                    sampling_number = None
+
+                    rank0_print(
+                        f"Loading {json_path} with {sampling_strategy} sampling strategy"
+                    )
+
+                    if json_path.endswith(".jsonl"):
+                        cur_data_dict = []
+                        with open(json_path, "r") as json_file:
+                            for line in json_file:
+                                cur_data_dict.append(json.loads(line.strip()))
+                    elif json_path.endswith(".json"):
+                        with open(json_path, "r") as json_file:
+                            cur_data_dict = json.load(json_file)
+                    else:
+                        raise ValueError(f"Unsupported file type: {json_path}")
+
+                    if ":" in sampling_strategy:
+                        sampling_strategy, sampling_number = sampling_strategy.split(
+                            ":"
+                        )
+                        if "%" in sampling_number:
+                            sampling_number = math.ceil(
+                                int(sampling_number.split("%")[0])
+                                * len(cur_data_dict)
+                                / 100
+                            )
+                        else:
+                            sampling_number = int(sampling_number)
+
+                    # Apply the sampling strategy
+                    if sampling_strategy == "first" and sampling_number is not None:
+                        cur_data_dict = cur_data_dict[:sampling_number]
+                    elif sampling_strategy == "end" and sampling_number is not None:
+                        cur_data_dict = cur_data_dict[-sampling_number:]
+                    elif sampling_strategy == "random" and sampling_number is not None:
+                        random.shuffle(cur_data_dict)
+                        cur_data_dict = cur_data_dict[:sampling_number]
+
+                    rank0_print(f"Loaded {len(cur_data_dict)} samples from {json_path}")
+                    self.list_data_dict.extend(cur_data_dict)
+
+        else:
+            list_data_dict = json.load(open(data_path, "r"))
+
+            rank0_print("Formatting inputs...Skip in lazy mode")
+            self.tokenizer = tokenizer
+            self.list_data_dict = list_data_dict
+            self.data_args = data_args
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -1120,6 +1194,44 @@ class LazySupervisedDataset(Dataset):
 
         return []  # Return empty list if image_id is not found
 
+    def sharegpt4v_get_segmentation_masks(self, folder_path, image_id):
+        """
+        Given a folder path and an image ID, retrieves the corresponding JSON file,
+        extracts segmentation masks, and returns them as a list of NumPy arrays.
+
+        Parameters:
+        folder_path (str): The directory containing the image and JSON files.
+        image_id (str): The identifier of the image (e.g., "sa_364383").
+
+        Returns:
+        list: A list of NumPy arrays, each representing a segmentation mask.
+        """
+        # Construct the JSON file path
+        if ".jpg" in image_id:
+            image_id = image_id.replace(".jpg", "")
+        json_file = os.path.join(folder_path, f"{image_id}.json")
+
+        # Load the JSON file
+        with open(json_file, "r") as f:
+            data = json.load(f)
+
+        masks = []
+        # Process each annotation in the file
+        for annotation in data.get("annotations", []):
+            segmentation = annotation.get("segmentation")
+            # Check if segmentation is in RLE format (a dict with 'counts')
+            if isinstance(segmentation, dict) and "counts" in segmentation:
+                # Decode the RLE to get a binary mask
+                binary_mask = maskUtils.decode(segmentation)
+                # Sometimes the returned mask has an extra channel dimension; remove it if needed.
+                if binary_mask.ndim == 3 and binary_mask.shape[-1] == 1:
+                    binary_mask = np.squeeze(binary_mask, axis=-1)
+                # Convert the mask to a boolean array (True for mask, False for background)
+                binary_mask = binary_mask.astype(bool)
+                masks.append(binary_mask)
+
+        return masks
+
     def create_masks(self, images):
         pass
 
@@ -1133,6 +1245,7 @@ class LazySupervisedDataset(Dataset):
             image_folder = self.data_args.image_folder
 
             if image_folder == "None":
+
                 image_ids = []
                 if "LLaVA-Pretrain" in image_file:
                     image_id = image_file.split("LLaVA-Pretrain/images/")[1]
@@ -1140,7 +1253,12 @@ class LazySupervisedDataset(Dataset):
                     image_id = image_file.split(
                         "/mnt/nushare2/data/baliao/multimodal/data/"
                     )[1]
+                elif "sam_images" in image_file:
+                    image_id = image_file.split(
+                        "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images/"
+                    )[1]
                 image_ids.append(image_id)
+
                 image = Image.open(image_file).convert("RGB")
             else:
                 image = Image.open(os.path.join(image_folder, image_file)).convert(
@@ -1152,6 +1270,10 @@ class LazySupervisedDataset(Dataset):
                 elif "LLaVA-Instruct-665k" in image_file:
                     image_id = image_file.split(
                         "/mnt/nushare2/data/baliao/multimodal/data/"
+                    )[1]
+                elif "sam_images" in image_file:
+                    image_id = image_file.split(
+                        "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images/"
                     )[1]
                 image_ids.append(image_id)
 
@@ -1222,8 +1344,10 @@ class LazySupervisedDataset(Dataset):
             crop_size = self.data_args.image_processor.crop_size
             data_dict["image"] = torch.zeros(3, crop_size["height"], crop_size["width"])
 
+        if len(image_ids) == 0:
+            return data_dict
         ##Sam2 Masking
-        if len(image_ids) > 1:
+        elif len(image_ids) > 1:
             ##multiple images support
             raise NotImplementedError
         else:
@@ -1234,6 +1358,7 @@ class LazySupervisedDataset(Dataset):
                     "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_cap/arrays",
                     image_id,
                 )
+                masks = self.read_mask_arrays(mask_files)
 
             elif "LLaVA-Instruct-665k" in image_file:
                 # print('sft')
@@ -1241,8 +1366,14 @@ class LazySupervisedDataset(Dataset):
                     "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_sft/arrays",
                     image_id,
                 )
+                masks = self.read_mask_arrays(mask_files)
 
-            masks = self.read_mask_arrays(mask_files)
+            elif "sam_images" in image_file:
+                masks = self.sharegpt4v_get_segmentation_masks(
+                    "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images",
+                    image_id,
+                )
+
             masks = [
                 torch.from_numpy(mask_np).to(image[0][0].device) for mask_np in masks
             ]
@@ -1302,6 +1433,7 @@ class DataCollatorForSupervisedDataset(object):
             else:
                 batch["images"] = images
 
+        if "masks" in instances[0]:
             masks = [instance["masks"] for instance in instances]
 
             batch["masks"] = masks

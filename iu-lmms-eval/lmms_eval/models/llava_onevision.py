@@ -36,7 +36,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 import sys
 
-llava_pth = os.path.join(os.path.split(__file__)[0], "../../../")  # -> /data/chatgpt/notebooks/vorshulevich/LLaVA-NeXT/iu-lmms-eval/lmms_eval/models/
+llava_pth = os.path.abspath(os.path.join(os.path.split(__file__)[0], "../../../"))  # -> /data/chatgpt/notebooks/vorshulevich/LLaVA-NeXT/iu-lmms-eval/lmms_eval/models/
 sys.path.append(f"{llava_pth}")
 
 # Import LLaVA modules

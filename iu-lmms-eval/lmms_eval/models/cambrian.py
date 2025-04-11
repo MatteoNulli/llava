@@ -20,16 +20,23 @@ warnings.filterwarnings("ignore")
 
 from loguru import logger as eval_logger
 
-try:
-    from cambrian.conversation import conv_templates
-    from cambrian.mm_utils import (
-        get_model_name_from_path,
-        process_images,
-        tokenizer_image_token,
-    )
-    from cambrian.model.builder import load_pretrained_model
-except ImportError:
-    eval_logger.error("Cambrian is not installed. Please install it by running `pip install cambrian`.")
+import sys
+
+cambrian_pth = os.path.abspath(os.path.join(os.path.split(__file__)[0], "../../../cambrian"))  # -> /data/chatgpt/notebooks/mnulli/llava/iu-lmms-eval/lmms_eval/models/ --> /data/chatgpt/notebooks/mnulli/llava/cambrian
+print("cambrian_pth", cambrian_pth)
+sys.path.append(f"{cambrian_pth}")
+
+# try:
+from cambrian.conversation import conv_templates
+from cambrian.mm_utils import (
+    get_model_name_from_path,
+    process_images,
+    tokenizer_image_token,
+)
+from cambrian.model.builder import load_pretrained_model
+
+# except ImportError:
+#     eval_logger.error("Cambrian is not installed. Please install it by running `pip install cambrian`.")
 
 # Model Constants
 IMAGE_TOKEN_INDEX = -200
@@ -135,20 +142,24 @@ class Cambrian(lmms):
         assert not kwargs, f"Unexpected kwargs: {kwargs}"
 
         accelerator = Accelerator()
-        self._device = torch.device(f"cuda:{accelerator.local_process_index}") if accelerator.num_processes > 1 else device
+        self.device = torch.device(f"cuda:{accelerator.local_process_index}") if accelerator.num_processes > 1 else "cuda:0"
 
         self.model_name = get_model_name_from_path(pretrained)
-        tokenizer, model, self.image_processor, context_len = load_pretrained_model(pretrained, None, self.model_name, device_map=self._device)
+        tokenizer, model, self.image_processor, context_len = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device)
 
-        self.conv_mode = {"cambrian-8b": "llama_3", "cambrian-13b": "vicuna_v1", "cambrian-34b": "chatml_direct"}.get(self.model_name)
+        if "nyu-visionx--cambrian-8b" in self.model_name:
+            self.model_name = "cambrian-8b"
+        self.conv_mode = {"cambrian-8b": "llama_3", "cambrian-8b": "llama_3", "cambrian-13b": "vicuna_v1", "cambrian-34b": "chatml_direct"}.get(self.model_name)
 
         if not self.conv_mode:
             raise ValueError(f"Unsupported model: {self.model_name}")
 
         self._model = model
-        self._tokenizer = tokenizer
+        self.tokenizer = tokenizer
         self._model.eval()
         self.batch_size_per_gpu = int(batch_size)
+        self.batch_size = int(batch_size)
+
         self.use_cache = use_cache
         self._rank = 0
         self._world_size = 1
@@ -162,7 +173,7 @@ class Cambrian(lmms):
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
         else:
-            self.model.to(self._device)
+            self.model.to(self.device)
 
         self.accelerator = accelerator
 
@@ -247,10 +258,11 @@ class Cambrian(lmms):
 
             visual_paths = []
             for visual in visuals:
-                name = uuid.uuid4().hex.upper()[0:6]
-                visual_path = f"/xpfs/public/gezhang/zk/lmms-eval/lmms_eval/tmp/{name}.png"
-                visual.save(visual_path)
-                visual_paths.append(visual_path)
+                # print("visual", visual)
+                # name = uuid.uuid4().hex.upper()[0:6]
+                # visual_path = f"/xpfs/public/gezhang/zk/lmms-eval/lmms_eval/tmp/{name}.png"
+                # visual.save(visual_path)
+                visual_paths.append(visual)
 
             gen_kwargs = all_gen_kwargs[0]
             until = [self.tokenizer.decode(self.eot_token_id)]
@@ -270,9 +282,11 @@ class Cambrian(lmms):
 
             until.append("<|eot_id|>")
 
-            image = Image.open(visual_paths[0]).convert("RGB")
+            # image = Image.open(visual_paths[0]).convert("RGB")
+            print("visual_paths", visual_paths)
+            image = visual_paths[0]
             question = contexts[0]
-
+            print("contexts", contexts)
             input_ids, image_tensor, image_sizes, prompt = process(image, question, self.tokenizer, self.image_processor, self.model.config, self.conv_mode)
             input_ids = input_ids.to(device=self.model.device, non_blocking=True)
 

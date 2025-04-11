@@ -196,6 +196,7 @@ def submit_task():
     print("root_dir", root_dir)
     task.add_directory(os.path.join(root_dir, "scripts"))
     task.add_directory(os.path.join(root_dir, "llava"))
+    task.add_directory(os.path.join(root_dir, "sam2"))
     # task.add_directory(os.path.join(root_dir, "llava/model"))
     # task.add_directory(os.path.join(root_dir, "llava/train"))
     # task.add_directory(os.path.join(root_dir, "llava/serve"))

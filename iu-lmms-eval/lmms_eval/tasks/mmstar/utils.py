@@ -29,10 +29,10 @@ replace_prompt = " Please answer yes or no."
 
 def mmstar_doc_to_visual(doc):
     try:
-        return [doc["image"].convert("RGB")]
+        return [doc["image"].convert("RGB"), doc["category"]]
     except:
         # Opening the image in a different way... \n Image is probably in bytes, string or different format. \n'
-        return [Image.open(io.BytesIO(doc['image'])).convert('RGB')]
+        return [Image.open(io.BytesIO(doc["image"])).convert("RGB"), doc["category"]]
 
 
 def mmstar_doc_to_text(doc, lmms_eval_specific_kwargs=None):

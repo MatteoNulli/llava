@@ -256,6 +256,7 @@ class TaskManager:
                     # very scuffed: set task name here. TODO: fixme?
                     task_object.config.task = config["task"]
             else:
+                print("config", config)
                 task_object = ConfigurableTask(config=config, model_name=self.model_name)
 
             return {task: task_object}

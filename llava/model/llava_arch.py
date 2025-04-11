@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 
 from .multimodal_encoder.builder import build_vision_tower
@@ -142,7 +143,10 @@ class LlavaMetaModel:
             )
 
             def get_w(weights, keyword):
-                return {k.split("model.")[1]: v for k, v in weights.items()}
+                return {
+                    k.split("model.mm_bom_mask_token.")[1]: v
+                    for k, v in weights.items()
+                }
 
             self.mm_bom_mask_token.load_state_dict(
                 get_w(mm_bom_mask_token_weights, "mm_bom_mask_token")
@@ -151,10 +155,8 @@ class LlavaMetaModel:
         else:
             print("Radomly Initializing mm_bom_mask_token")
             projector_input_features = self.mm_projector[0].in_features
-            self.mm_bom_mask_token = nn.Parameter(
-                torch.randn(
-                    (1, projector_input_features), dtype=self.dtype, device="cuda"
-                )
+            self.mm_bom_mask_token = BOMMaskToken(
+                projector_input_features, self.dtype, device="cuda"
             )
 
 
@@ -221,18 +223,24 @@ class LlavaMetaForCausalLM(ABC):
         torch.Tensor: A 1D boolean tensor of length 'output_size'.
         """
         # Convert mask to float and flatten
-        mask_flat = mask.float().flatten().unsqueeze(0).unsqueeze(0)  # shape: (1,1,N)
+        mask_flat = (
+            mask.float().flatten().contiguous().unsqueeze(0).unsqueeze(0)
+        )  # shape: (1,1,N)
 
         # Compute approximate number of pixels per bin.
         total_pixels = mask.numel()
+        assert mask.numel() > 0, "Input mask is empty"
         bin_size = (
             total_pixels / output_size
         )  # average number of original pixels per output bin
 
         # Adaptive average pooling: each bin now contains the fraction of True pixels over ~bin_size pixels.
+        # print("mask_flat shape device", mask_flat.shape, mask_flat.device)
+        # print("output_size", output_size)
         pooled = torch.nn.functional.adaptive_avg_pool1d(
             mask_flat, output_size
         ).squeeze()  # shape: (output_size,)
+        # print("pooled device", pooled.device, pooled.shape)
 
         # Convert the fraction to an estimated count per bin.
         counts = pooled * bin_size
@@ -241,8 +249,42 @@ class LlavaMetaForCausalLM(ABC):
         downsampled_mask = counts >= threshold_count
         return downsampled_mask
 
+    def create_dummy_masks(self, first_dim, num_masks=10):
+        masks = []
+        patch_size = first_dim // num_masks
+        for i in range(num_masks):
+            mask = np.zeros(first_dim, dtype=bool)
+            # For the last mask, include any remainder
+            start = i * patch_size
+            end = (i + 1) * patch_size if i < num_masks - 1 else first_dim
+            mask[start:end] = True
+            masks.append(mask)
+        return masks
+
+    def create_sliding_masks(self, first_dim, num_masks=10):
+        masks = []
+        patch_size = first_dim // num_masks
+        for i in range(num_masks):
+            mask = np.zeros(first_dim, dtype=bool)
+            # For the last mask, include any remainder
+            start = i * patch_size
+            end = (i + 1) * patch_size if i < num_masks - 1 else first_dim
+            mask[start:end] = True
+            masks.append(mask)
+        return masks
+
     def apply_masks_with_tokens(
-        self, images_batch, masks_batch, global_view=False, averaging=False
+        self,
+        images_batch,
+        masks_batch,
+        global_view=False,
+        averaging=False,
+        mask_removing=False,
+        mask_limiting=False,
+        mask_limit=20,
+        averaging_global_view=False,
+        no_masktoken=False,
+        use_sliding_window=False,
     ):
         """
         Applies masks to the image features and appends special tokens signaling the masked feature start/end.
@@ -257,6 +299,7 @@ class LlavaMetaForCausalLM(ABC):
         """
 
         batch_size = images_batch.shape[0]
+        # print("images_batch", images_batch)
 
         batched_features = []
         for i, (image_features, image_masks) in enumerate(
@@ -265,42 +308,161 @@ class LlavaMetaForCausalLM(ABC):
 
             # Get image features shape (batch_size, first_dim, feature_dim)
             first_dim, feature_dim = image_features.shape
+            torch.set_printoptions(threshold=image_masks[0].numel())
 
-            # import pdb; pdb.set_trace()
-            resized_image_masks = [
-                self.downsample_mask_to_1d_counts(mask, first_dim)
-                for mask in image_masks
-            ]
+            # print("image_masks[0].shape", image_masks[0].shape)
 
-            masked_features = [image_features[mask] for mask in resized_image_masks]
+            # print("image_masks[0]", image_masks[0])
+            # print("image_masks[1]", image_masks[1])
+            # print("image_masks[2]", image_masks[2])
 
-            ##appending whole image feature at the beginning of the masks features
-            if global_view:
-                masked_features.insert(0, image_features)
+            if use_sliding_window:
+                resized_image_masks = self.create_sliding_masks(first_dim, num_masks=10)
+            elif use_dummy_masks:
+                resized_image_masks = self.create_dummy_masks(first_dim, num_masks=10)
+            else:
+                resized_image_masks = [
+                    self.downsample_mask_to_1d_counts(mask, first_dim).to(
+                        image_features.device
+                    )
+                    for mask in image_masks
+                ]
+
+            # print("resized_image_masks[0]", resized_image_masks[1])
+            # print("resized_image_masks[0]", resized_image_masks[2])
+
+            image_features = image_features.to(images_batch.device)
+
+            if mask_removing and len(resized_image_masks) > mask_limit:
+                masked_features = []
+            elif mask_limiting and len(resized_image_masks) > mask_limit:
+                masked_features = [
+                    image_features[mask] for mask in resized_image_masks[:mask_limit]
+                ]
+            else:
+                masked_features = [image_features[mask] for mask in resized_image_masks]
 
             if averaging:
                 masked_features = [
-                    torch.mean(masked_feat, dim=0).reshape(1, feature_dim)
-                    for mask_feat in mask_features
+                    torch.mean(mask_feat, dim=0).reshape(1, feature_dim)
+                    for mask_feat in masked_features
                 ]  # averaging across 576 --> (bs, feature_dim)
+            ##appending whole image feature at the beginning of the masks features
+            if global_view and not averaging_global_view and not no_masktoken:
+                if hasattr(self.get_model(), "mm_bom_mask_token"):
+                    masked_with_tokens = torch.cat(
+                        [image_features]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+                else:
+                    masked_with_tokens = torch.cat(
+                        [image_features]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+            elif global_view and averaging_global_view and not no_masktoken:
+                if hasattr(self.get_model(), "mm_bom_mask_token"):
+                    masked_with_tokens = torch.cat(
+                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
 
-            # import pdb; pdb.set_trace()
-            masked_with_tokens = [
-                torch.cat(
-                    [
-                        self.get_model().mm_bom_mask_token.to(image_features.device),
-                        mask_feat,
-                    ],
+                else:
+                    masked_with_tokens = torch.cat(
+                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+
+            elif global_view and not averaging_global_view and no_masktoken:
+                masked_with_tokens = torch.cat(
+                    [image_features] + [mask_feat for mask_feat in masked_features],
                     dim=0,
                 )
-                for mask_feat in masked_features
-            ]
+            elif not global_view and not averaging_global_view and no_masktoken:
+                masked_with_tokens = torch.cat(
+                    [mask_feat for mask_feat in masked_features], dim=0
+                )
+            elif global_view and averaging_global_view and no_masktoken:
+                masked_with_tokens = torch.cat(
+                    [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                    + [mask_feat for mask_feat in masked_features],
+                    dim=0,
+                )
 
-            # Step 4: Concatenate all features
-            single_image_features = torch.cat(
-                masked_with_tokens, dim=0
-            )  # Shape (bs, (1 + n) * 576 + 2n, 1024)
-            batched_features.append(single_image_features.to(image_features.device))
+            else:
+                if hasattr(self.get_model(), "mm_bom_mask_token"):
+                    masked_with_tokens = torch.cat(
+                        [
+                            torch.cat(
+                                [
+                                    self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                        image_features.device
+                                    ),
+                                    mask_feat,
+                                ],
+                                dim=0,
+                            )
+                            for mask_feat in masked_features
+                        ],
+                        dim=0,
+                    )
+                else:
+                    masked_with_tokens = torch.cat(
+                        [
+                            torch.cat(
+                                [
+                                    self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                        image_features.device
+                                    ),
+                                    mask_feat,
+                                ],
+                                dim=0,
+                            )
+                            for mask_feat in masked_features
+                        ],
+                        dim=0,
+                    )
+            # Shape (bs, (1 + n) * 576 + 2n, 1024)
+            batched_features.append(masked_with_tokens.to(image_features.device))
 
         padding = True
         if padding:
@@ -328,104 +490,13 @@ class LlavaMetaForCausalLM(ABC):
 
         return final_output
 
-    # def apply_masks_with_tokens_batched(
-    #     self, images_batch, masks_batch, global_view=False, averaging=False
-    # ):
-    #     """
-    #     Applies masks to the image features and appends special tokens signaling the masked feature start/end.
-
-    #     Parameters:
-    #         images_batch (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
-    #         masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
-    #                                     the inner Tensors are of size (n. of masks, (image_h, image_w)).
-
-    #     Returns:
-    #         torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
-    #     """
-    #     batch_size, vision_encoder_dim, feature_dim = images_batch.shape
-    #     for i, image_masks in enumerate(masks_batch):
-    #         masks_batch[i] = torch.stack(
-    #             [
-    #                 self.downsample_mask_to_1d_counts(mask, vision_encoder_dim)
-    #                 for mask in image_masks
-    #             ]
-    #         )
-
-    #     ## calculate maximum number of masks across the batch and pad with it for standard tensor operations for it, masks_batch is now a tensor
-    #     masks_batch = pad_sequence(
-    #         masks_batch, batch_first=True, padding_value=False
-    #     ).to(images_batch.device)
-
-    #     ## expand the images_batch adding the n.masks and add feature dim to masks_batch
-    #     images_batch = images_batch.unsqueeze(1)
-    #     masks_batch = masks_batch.unsqueeze(-1)
-
-    #     masked_features = torch.where(
-    #         masks_batch, images_batch, torch.tensor(0.0)
-    #     )  # --> output is of shape (batch_size, max_masks, vision_encoder_dim, feature_dim)
-
-    #     ##TODO: Do we aim to have this shape (batch_size, max_masks, vision_encoder_dim, feature_dim)?
-    #     ###     Or, for inference purpose, we want to have something like this (batch_size, max_masks, x, feature_dim), where x is the maximum number of non-zero values across the masks?
-    #     ###     We kinda have to do this to avoid giving to many visual tokens to the llm.
-    #     ###     However, the problem with the latter is we kill any locality we might have in the image, because we are essentially removing all the spatial information by taking out the zeros.
-    #     ##      If the latter, we need to reshape the tensor to have the desired shape and padd all the other masks.
-    #     # padding = True
-    #     # if padding:
-    #     #     valid_mask = (masked_features != 0).any(dim=3)
-
-    #     #     # Compute the number of valid (nonzero) rows for each mask
-    #     #     # This gives a tensor of shape [B, M]
-    #     #     valid_counts = valid_mask.sum(dim=2)
-
-    #     #     # Find the maximum valid rows among all masks. In your example, you mentioned
-    #     #     # that one mask has 213 and the other 588 valid rows. You can choose the maximum
-    #     #     # (588) or a custom target (like 558) if needed. Here, we'll use the maximum.
-    #     #     max_valid = valid_counts.max().item()  # This would be 588 in your example
-
-    #     #     # Now, for each batch (B) and each mask (M), extract valid rows and pad to max_valid.
-    #     #     padded_res = []  # Will collect results per batch
-    #     #     batch_size, max_n_masks, _, _ = (
-    #     #         masked_features.shape
-    #     #     )  # e.g., (1, 2, 729, 1125)
-
-    #     #     for b in range(batch_size):
-    #     #         batch_masks = []
-    #     #         for m in range(max_n_masks):
-    #     #             # Get the indices (in dim 2) where the row has any nonzero element.
-    #     #             valid_indices = valid_mask[b, m].nonzero(as_tuple=True)[0]
-    #     #             valid_rows = masked_features[
-    #     #                 b, m, valid_indices, :
-    #     #             ]  # shape: [num_valid, E]
-    #     #             num_valid = valid_rows.shape[0]
-    #     #             # Determine how many rows to pad to reach max_valid
-    #     #             pad_rows = max_valid - num_valid
-    #     #             # Use F.pad to pad at the bottom (i.e. after the valid rows) along dimension 0.
-    #     #             # F.pad expects a tuple (pad_left, pad_right, pad_top, pad_bottom)
-    #     #             valid_rows_padded = torch.nn.functional.pad(
-    #     #                 valid_rows, (0, 0, 0, pad_rows)
-    #     #             )
-    #     #             # valid_rows_padded now has shape [max_valid, E]
-    #     #             batch_masks.append(valid_rows_padded)
-    #     #         # Stack the masks for this batch along the mask dimension (dim 1)
-    #     #         batch_tensor = torch.stack(
-    #     #             batch_masks, dim=0
-    #     #         )  # shape: [M, max_valid, E]
-    #     #         padded_res.append(batch_tensor)
-    #     #     # Finally, stack across batches
-    #     #     padded_res = torch.stack(padded_res, dim=0)  # shape: [B, M, max_valid, E]
-    #     #     masked_features = padded_res
-
-    #     final_output = masked_features.flatten(start_dim=1, end_dim=2)
-
-    #     return final_output
-
     def encode_images(self, images, masks, masking=False):
         """
         Encodes images in the vision encoder and then in the multimodal projector
 
         Parameters:
             images (torch.Tensor): Tensor of input images to the vision encoder shape (batch_size, vision_encoder_input, feature_dim).
-            masks (torch.Tensor): List of Tensor. The Outer list if of batch_size length, the inner list is of lenght number of masks in each image.
+            masks (List[torch.Tensor]): List of Tensor. The Outer list if of batch_size length, the inner list is of lenght number of masks in each image.
 
         Returns:
             torch.Tensor: Image features outputted from multimodal projector.
@@ -433,13 +504,31 @@ class LlavaMetaForCausalLM(ABC):
 
         ##passing images to vision encoder
         image_features = self.get_model().get_vision_tower()(images)
+
         # image_features = self.get_model().vision_resampler(image_features, images=images)
         ## B.O. MASKING PART
         if masking and any(torch.any(mask != 0).item() for mask in masks):
+            global_view = False
+            averaging = False
+            mask_removing = False
+            mask_limiting = False
+            mask_limit = 20
+            averaging_global_view = False
+            no_masktoken = False
+            use_sliding_window = True
             # Inserting Masking information within Image embeddings
-            image_features = self.apply_masks_with_tokens(image_features, masks).to(
-                images.dtype
-            )
+            image_features = self.apply_masks_with_tokens(
+                image_features,
+                masks,
+                global_view=global_view,
+                averaging=averaging,
+                mask_removing=mask_removing,
+                mask_limiting=mask_limiting,
+                mask_limit=mask_limit,
+                averaging_global_view=averaging_global_view,
+                no_masktoken=no_masktoken,
+                use_sliding_window=use_sliding_window,
+            ).to(images.dtype)
         ## E.O. MASKING PART
         image_features = self.get_model().mm_projector(image_features)
 
@@ -472,9 +561,15 @@ class LlavaMetaForCausalLM(ABC):
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             concat_images = torch.cat([image for image in images], dim=0)
 
-            image_features = self.encode_images(
-                concat_images, masks, masking=self.get_model().sam2_masking_token
-            )
+            if hasattr(self.get_model(), "sam2_masking_token"):
+                image_features = self.encode_images(
+                    concat_images, masks, masking=self.get_model().sam2_masking_token
+                )
+            else:
+                image_features = self.encode_images(
+                    concat_images, masks, masking=self.sam2_masking_token
+                )
+
             split_sizes = [image.shape[0] for image in images]
             image_features = torch.split(image_features, split_sizes, dim=0)
             mm_patch_merge_type = getattr(self.config, "mm_patch_merge_type", "flat")
@@ -547,9 +642,17 @@ class LlavaMetaForCausalLM(ABC):
                     f"Unexpected mm_patch_merge_type: {self.config.mm_patch_merge_type}"
                 )
         else:
-            image_features = self.encode_images(
-                images, masks, masking=self.get_model().sam2_masking_token
-            )
+            if hasattr(self.get_model(), "sam2_masking_token"):
+                image_features = self.encode_images(
+                    images, masks, masking=self.get_model().sam2_masking_token
+                )
+            else:
+                print("using self.sam2_masking_token = ", self.sam2_masking_token)
+                image_features = self.encode_images(
+                    images, masks, masking=self.sam2_masking_token
+                )
+
+        # print("image_features.shape", image_features.shape)
 
         # TODO: image start / end is not implemented here to support pretraining.
         if getattr(self.config, "tune_mm_mlp_adapter", False) and getattr(
@@ -785,13 +888,6 @@ class LlavaMetaForCausalLM(ABC):
                 input_embeddings[-num_new_tokens:] = input_embeddings_avg
                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
-            if model_args.pretrain_mm_bom_mask_token:
-                mm_bom_mask_token_weights = torch.load(
-                    model_args.pretrain_mm_bom_mask_token, map_location="cpu"
-                )
-                mm_bom_mask_token_weight = mm_bom_mask_token_weights[
-                    "model.mm_bom_mask_token"
-                ]
                 # assert num_new_tokens == 2
                 # output_embeddings[-num_new_tokens:] = mm_bom_mask_token_weight
 
@@ -824,3 +920,94 @@ class LlavaMetaForCausalLM(ABC):
                     p.requires_grad = False
                 for p in self.get_output_embeddings().parameters():
                     p.requires_grad = False
+
+    # def apply_masks_with_tokens_batched(
+    #     self, images_batch, masks_batch, global_view=False, averaging=False
+    # ):
+    #     """
+    #     Applies masks to the image features and appends special tokens signaling the masked feature start/end.
+
+    #     Parameters:
+    #         images_batch (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
+    #         masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
+    #                                     the inner Tensors are of size (n. of masks, (image_h, image_w)).
+
+    #     Returns:
+    #         torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+    #     """
+    #     batch_size, vision_encoder_dim, feature_dim = images_batch.shape
+    #     for i, image_masks in enumerate(masks_batch):
+    #         masks_batch[i] = torch.stack(
+    #             [
+    #                 self.downsample_mask_to_1d_counts(mask, vision_encoder_dim)
+    #                 for mask in image_masks
+    #             ]
+    #         )
+
+    #     ## calculate maximum number of masks across the batch and pad with it for standard tensor operations for it, masks_batch is now a tensor
+    #     masks_batch = pad_sequence(
+    #         masks_batch, batch_first=True, padding_value=False
+    #     ).to(images_batch.device)
+
+    #     ## expand the images_batch adding the n.masks and add feature dim to masks_batch
+    #     images_batch = images_batch.unsqueeze(1)
+    #     masks_batch = masks_batch.unsqueeze(-1)
+
+    #     masked_features = torch.where(
+    #         masks_batch, images_batch, torch.tensor(0.0)
+    #     )  # --> output is of shape (batch_size, max_masks, vision_encoder_dim, feature_dim)
+
+    #     ##TODO: Do we aim to have this shape (batch_size, max_masks, vision_encoder_dim, feature_dim)?
+    #     ###     Or, for inference purpose, we want to have something like this (batch_size, max_masks, x, feature_dim), where x is the maximum number of non-zero values across the masks?
+    #     ###     We kinda have to do this to avoid giving to many visual tokens to the llm.
+    #     ###     However, the problem with the latter is we kill any locality we might have in the image, because we are essentially removing all the spatial information by taking out the zeros.
+    #     ##      If the latter, we need to reshape the tensor to have the desired shape and padd all the other masks.
+    #     # padding = True
+    #     # if padding:
+    #     #     valid_mask = (masked_features != 0).any(dim=3)
+
+    #     #     # Compute the number of valid (nonzero) rows for each mask
+    #     #     # This gives a tensor of shape [B, M]
+    #     #     valid_counts = valid_mask.sum(dim=2)
+
+    #     #     # Find the maximum valid rows among all masks. In your example, you mentioned
+    #     #     # that one mask has 213 and the other 588 valid rows. You can choose the maximum
+    #     #     # (588) or a custom target (like 558) if needed. Here, we'll use the maximum.
+    #     #     max_valid = valid_counts.max().item()  # This would be 588 in your example
+
+    #     #     # Now, for each batch (B) and each mask (M), extract valid rows and pad to max_valid.
+    #     #     padded_res = []  # Will collect results per batch
+    #     #     batch_size, max_n_masks, _, _ = (
+    #     #         masked_features.shape
+    #     #     )  # e.g., (1, 2, 729, 1125)
+
+    #     #     for b in range(batch_size):
+    #     #         batch_masks = []
+    #     #         for m in range(max_n_masks):
+    #     #             # Get the indices (in dim 2) where the row has any nonzero element.
+    #     #             valid_indices = valid_mask[b, m].nonzero(as_tuple=True)[0]
+    #     #             valid_rows = masked_features[
+    #     #                 b, m, valid_indices, :
+    #     #             ]  # shape: [num_valid, E]
+    #     #             num_valid = valid_rows.shape[0]
+    #     #             # Determine how many rows to pad to reach max_valid
+    #     #             pad_rows = max_valid - num_valid
+    #     #             # Use F.pad to pad at the bottom (i.e. after the valid rows) along dimension 0.
+    #     #             # F.pad expects a tuple (pad_left, pad_right, pad_top, pad_bottom)
+    #     #             valid_rows_padded = torch.nn.functional.pad(
+    #     #                 valid_rows, (0, 0, 0, pad_rows)
+    #     #             )
+    #     #             # valid_rows_padded now has shape [max_valid, E]
+    #     #             batch_masks.append(valid_rows_padded)
+    #     #         # Stack the masks for this batch along the mask dimension (dim 1)
+    #     #         batch_tensor = torch.stack(
+    #     #             batch_masks, dim=0
+    #     #         )  # shape: [M, max_valid, E]
+    #     #         padded_res.append(batch_tensor)
+    #     #     # Finally, stack across batches
+    #     #     padded_res = torch.stack(padded_res, dim=0)  # shape: [B, M, max_valid, E]
+    #     #     masked_features = padded_res
+
+    #     final_output = masked_features.flatten(start_dim=1, end_dim=2)
+
+    #     return final_output

@@ -9,19 +9,25 @@ doc_to_text: !function utils.cvbench_doc_to_text_mc
 doc_to_target: "answer"
 # Note that the metric name can be either a registed metric function (such as the case for GQA) or a key name returned by process_results
 generation_kwargs:
-  max_new_tokens: 16
+  max_new_tokens: 100
   temperature: 0
   top_p: 0
   num_beams: 1
   do_sample: false
 process_results: !function utils.cvbench_process_results
 metric_list:
-  - metric: string_matching_accuracy
+  - metric: 2D_matching_accuracy
+    aggregation: !function utils.accuracies_2D
+    higher_is_better: true
+  - metric: 3D_matching_accuracy
+    aggregation: !function utils.accuracies_3D
+    higher_is_better: true
+  - metric: overall_matching_accuracy
     aggregation: !function utils.combine_accuracies
     higher_is_better: true
 lmms_eval_specific_kwargs:
   default:
     pre_prompt: ""
-    post_prompt: " "
+    post_prompt: "\nAnswer with the option's letter from the given choices directly. Answer only with one letter without providing any reasoning. "
 metadata:
   - version: 0.0

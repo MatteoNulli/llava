@@ -29,7 +29,7 @@ from transformers import (
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
-from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
+from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM, BOMMaskToken
 
 
 class LlavaConfig(LlamaConfig):
@@ -52,7 +52,13 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
+        self.sam2_masking_token = False
+        # projector_input_features = self.model.
+        if hasattr(self.model, "mm_projector"):
+            projector_input_features = self.model.mm_projector[0].in_features
+            self.mm_bom_mask_token = BOMMaskToken(
+                projector_input_features, self.dtype, device="cuda"
+            )
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -115,12 +121,13 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-    
+
     @torch.no_grad()
     def generate(
         self,
         inputs: Optional[torch.Tensor] = None,
         images: Optional[torch.Tensor] = None,
+        masks: Optional[torch.LongTensor] = None,
         image_sizes: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
@@ -130,7 +137,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             raise NotImplementedError("`inputs_embeds` is not supported")
 
         if images is not None:
-            
+
             (inputs, position_ids, attention_mask, _, inputs_embeds, _) = (
                 self.prepare_inputs_labels_for_multimodal(
                     inputs,
@@ -139,6 +146,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                     None,
                     None,
                     images,
+                    masks,
                     image_sizes=image_sizes,
                 )
             )

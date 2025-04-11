@@ -1,11 +1,11 @@
-python krylov/submit_nlp.py \
-    krylov/scripts/eval_lmms_workflow.sh \
-    --ems_project llava-benchmarking \
-    --experiment_name benchmarking-ebench-sm-internvl2 \
+python ./krylov/submit.py \
+    ./krylov/scripts/eval_lmms_workflow.sh \
+    --ems_project thesis-benchmarking \
+    --experiment_name slidingwindow_otherbenchs_noglob \
     --cluster tess137 \
     -n chatgpt \
-    -i hub.tess.io/image-understanding/0.0.7-bumped4:latest \
-    --gpu_per_node 4 \
+    -i hub.tess.io/vorshulevich/vllm:latest \
+    --gpu_per_node 2 \
     --num_nodes 1 \
     --cpu 16 \
     --memory 128 \

@@ -1,7 +1,7 @@
 python submit.py \
-    pretrain_thesis.sh \
-    --ems_project thesis-train \
-    --experiment_name thesis-oldcodebase-llama31-clip \
+    ./scripts/train/pretrain_thesis.sh \
+    --ems_project thesis-training \
+    --experiment_name thesis-llama31-siglip2-globalview \
     --cluster tess137 \
     -n chatgpt \
     -i hub.tess.io/vorshulevich/vllm:latest \
