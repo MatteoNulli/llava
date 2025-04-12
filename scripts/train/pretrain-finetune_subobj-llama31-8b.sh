@@ -14,6 +14,9 @@ export HF_DATASETS_CACHE=/mnt/nushare2/data/vorshulevich/.cache/huggingface/data
 export TORCH_EXTENSIONS_DIR=/mnt/nushare2/data/vorshulevich/.llm_cache/torch_cache
 export TRITON_CACHE_DIR=/mnt/nushare2/data/vorshulevich/.triton/autotune
 
+
+pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+
 export OMP_NUM_THREADS=8
 export NCCL_IB_DISABLE=0
 export NCCL_IB_GID_INDEX=3
@@ -32,10 +35,11 @@ pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 cd /opt/krylov-workflow/src/run_fn_0/
 
-
 # First job
 echo "Starting pretraining job..."
-CAP_EPOCHS=2
+CAP_EPOCHS=1
+
+MLP=subobject_tokenization
 
 MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
@@ -58,54 +62,56 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="8bs_avg_global-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_RUN_NAME="$MLP-second_run-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
 BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
-# mkdir -p $BASE_SAVE_DIR
-# ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
-#     llava/train/train_mem.py \
-#     --deepspeed scripts/zero3.json \
-#     --model_name_or_path $MODEL_DIR \
-#     --version llama3 \
-#     --data_path $DATA_PATH \
-#     --image_folder $IMG_DIR \
-#     --vision_tower $VIS_TOWER \
-#     --mm_projector_type mlp2x_gelu \
-#     --tune_mm_mlp_adapter True \
-#     --mm_vision_select_layer -2 \
-#     --mm_use_im_start_end False \
-#     --mm_use_im_patch_token False \
-#     --bf16 True \
-#     --output_dir $BASE_SAVE_DIR \
-#     --num_train_epochs $CAP_EPOCHS \
-#     --per_device_train_batch_size 8 \
-#     --per_device_eval_batch_size 4 \
-#     --gradient_accumulation_steps 4 \
-#     --evaluation_strategy "no" \
-#     --save_strategy "steps" \
-#     --save_steps 24000 \
-#     --save_total_limit 1 \
-#     --learning_rate 1e-3 \
-#     --weight_decay 0. \
-#     --warmup_ratio 0.03 \
-#     --lr_scheduler_type "cosine" \
-#     --logging_steps 1 \
-#     --tf32 True \
-#     --model_max_length 2048 \
-#     --gradient_checkpointing True \
-#     --dataloader_num_workers 4 \
-#     --lazy_preprocess True \
-#     --report_to none \
-#     --sam2_masking_token True \
-#     --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
+mkdir -p $BASE_SAVE_DIR
+ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
+    llava/train/train_mem.py \
+    --deepspeed scripts/zero3.json \
+    --model_name_or_path $MODEL_DIR \
+    --version llama3 \
+    --data_path $DATA_PATH \
+    --image_folder $IMG_DIR \
+    --vision_tower $VIS_TOWER \
+    --mm_projector_type $MLP \
+    --tune_mm_mlp_adapter True \
+    --mm_vision_select_layer -2 \
+    --mm_use_im_start_end False \
+    --mm_use_im_patch_token False \
+    --bf16 True \
+    --output_dir $BASE_SAVE_DIR \
+    --num_train_epochs $CAP_EPOCHS \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 4 \
+    --evaluation_strategy "no" \
+    --save_strategy "steps" \
+    --save_steps 24000 \
+    --save_total_limit 1 \
+    --learning_rate 1e-3 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --tf32 True \
+    --model_max_length 2048 \
+    --gradient_checkpointing True \
+    --dataloader_num_workers 4 \
+    --lazy_preprocess True \
+    --report_to none \
+    --sam2_masking_token True \
+    --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
 
 
 
 # Second job
 echo "Starting finetuning job..."
-SFT_EPOCHS=2
+SFT_EPOCHS=1
+
+MLP=subobject_tokenization
 
 MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
@@ -124,7 +130,7 @@ VIS_TOWER=/mnt/nushare2/data/baliao/multimodal/model_zoos/openai/clip-vit-large-
 VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
-SFT_RUN_NAME="8bs_avg_global-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$CAP_EPOCHS-capEpochs-$SFT_EPOCHS-sftEpochs"
+SFT_RUN_NAME="$MLP-second_run-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$CAP_EPOCHS-capEpochs-$SFT_EPOCHS-sftEpochs"
 
 PROJECTOR=${BASE_SAVE_DIR}/mm_projector.bin
 MASK_TOKEN=${BASE_SAVE_DIR}/mm_bom_mask_token.bin
@@ -144,7 +150,7 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --vision_tower $VIS_TOWER \
     --pretrain_mm_mlp_adapter $PROJECTOR \
     --pretrain_mm_bom_mask_token $MASK_TOKEN \
-    --mm_projector_type mlp2x_gelu \
+    --mm_projector_type $MLP \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
@@ -172,6 +178,6 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to none \
-    --overwrite_output_dir \
     --sam2_masking_token True \
+    --overwrite_output_dir \
     2>&1 | tee $SAVE_DIR/out

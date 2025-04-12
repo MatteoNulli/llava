@@ -1,7 +1,7 @@
 python submit.py \
-    ./scripts/train/pretrain-finetune_thesis-llama31-8b.sh \
+    ./scripts/train/pretrain-finetune_subobj-llama31-8b.sh \
     --ems_project thesis-training \
-    --experiment_name llama31-avg_global-view-2cap-2epochssft \
+    --experiment_name llama31-subobject_tokenization_secondtry \
     --cluster tess137 \
     -n chatgpt \
     -i hub.tess.io/vorshulevich/vllm:latest \
