@@ -98,7 +98,9 @@ class VisualTokenEmbedding(torch.nn.Module):
         spatial_size = int(batch_features.shape[1] ** 0.5)  # from 576 to 24x24.
 
         # Reshape the tensor to [batch_size, H, W, feature_dim]
-        batch_features = batch_features.reshape(8, spatial_size, spatial_size, 1024)
+        batch_features = batch_features.reshape(
+            int(images.shape[0]), spatial_size, spatial_size, self.config.mm_hidden_size
+        )
 
         # Permute to channels-first format: [B, feature_dim, spatial_size, spatial_size]
         batch_features = batch_features.permute(0, 3, 1, 2)
