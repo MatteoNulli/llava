@@ -16,8 +16,6 @@ export NO_PROXY=krylov,ams,ems,mms,localhost,127.0.0.1,.vip.hadoop.ebay.com,.vip
 # pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 
-export CUDA_LAUNCH_BLOCKING=1 TORCH_USE_CUDA_DSA=1
-
 NUM_MACHINES=${NUM_MACHINES:-1}
 NUM_GPUS=${NUM_GPUS:-1}
 
@@ -54,7 +52,13 @@ NUM_GPUS=${NUM_GPUS:-1}
 # CONV_MODE='llama3'
 
 
-MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
+# MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
+# MODEL_NAME=$(basename "$MODEL_DIR")
+# MODEL_BASE=/mnt/mtrepo/data/wwalentynowicz/models/Meta-Llama-3_1-8B-Instruct
+# # # MODEL_BASE=/mnt/nushare2/data/mnulli/model_zoos/language_models/meta-llama--Llama-3.2-1B-Instruct
+# CONV_MODE='llama3'
+
+MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--llava-hf--llama3-llava-next-8b-hf/snapshots/b041c0d0ea0dd0196d147206c210c8d1752fc2da
 MODEL_NAME=$(basename "$MODEL_DIR")
 MODEL_BASE=/mnt/mtrepo/data/wwalentynowicz/models/Meta-Llama-3_1-8B-Instruct
 # # MODEL_BASE=/mnt/nushare2/data/mnulli/model_zoos/language_models/meta-llama--Llama-3.2-1B-Instruct

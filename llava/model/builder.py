@@ -160,7 +160,7 @@ def load_pretrained_model(
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             print("Loading LLaVA from base model...")
-            print("lora_cfg_pretrained", lora_cfg_pretrained)
+            # print("lora_cfg_pretrained", lora_cfg_pretrained)
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs
             )
@@ -178,7 +178,19 @@ def load_pretrained_model(
                 )
 
             print("Loading additional LLaVA weights...")
-            if os.path.exists(os.path.join(model_path, "non_lora_trainables.bin")):
+            ##trying something, to be deleted
+            if (
+                model.config.mm_projector_type == "mlp2x_gelu,subobject_tokenization"
+                and os.path.exists(
+                    "/data/chatgpt/notebooks/mnulli/merged_non_lora_trainables.bin"
+                )
+            ):
+
+                non_lora_trainables = torch.load(
+                    "/data/chatgpt/notebooks/mnulli/merged_non_lora_trainables.bin",
+                    map_location="cpu",
+                )
+            elif os.path.exists(os.path.join(model_path, "non_lora_trainables.bin")):
                 non_lora_trainables = torch.load(
                     os.path.join(model_path, "non_lora_trainables.bin"),
                     map_location="cpu",
@@ -205,7 +217,30 @@ def load_pretrained_model(
                     (k[6:] if k.startswith("model.") else k): v
                     for k, v in non_lora_trainables.items()
                 }
+
+            if "model.mm_bom_mask_token.mm_bom_mask_token" in non_lora_trainables:
+                non_lora_trainables["model.mm_bom_mask_token"] = (
+                    non_lora_trainables.pop("model.mm_bom_mask_token.mm_bom_mask_token")
+                )
+
             model.load_state_dict(non_lora_trainables, strict=False)
+
+            if "model.mm_bom_mask_token" in non_lora_trainables:
+                print(
+                    f"Loading mm_bom_mask_token weights from {os.path.join(model_path, 'non_lora_trainables.bin')}"
+                )
+
+                # Get the tensor from the state dict
+                loaded_token = non_lora_trainables["model.mm_bom_mask_token"]
+
+                # Ensure the tensor is on the same device as the model's parameter
+                loaded_token = loaded_token.to(
+                    model.mm_bom_mask_token.mm_bom_mask_token.device
+                )
+
+                # Update the parameter in your BOMMaskToken instance
+                # This copies the data from loaded_token into the existing parameter tensor
+                model.mm_bom_mask_token.mm_bom_mask_token.data.copy_(loaded_token)
 
             from peft import PeftModel, LoraConfig
 
@@ -213,7 +248,6 @@ def load_pretrained_model(
             try:
                 model = PeftModel.from_pretrained(model, model_path)
             except:
-
                 # # Read the JSON file
                 input_file = model_path + "/adapter_config.json"
                 output_file = "/data/chatgpt/notebooks/mnulli" + "/adapter_config.json"

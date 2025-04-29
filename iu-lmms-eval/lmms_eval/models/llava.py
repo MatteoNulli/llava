@@ -362,10 +362,10 @@ class Llava(lmms):
             batched_visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]  # [B, N]
             if task == "cvbench":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/nyu-cvbench/arrays"
-                self.model.sam2_masking_token = True
+                self.model.sam2_masking_token = False
             elif task == "mmvp":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmvp/arrays"
-                self.model.sam2_masking_token = True
+                self.model.sam2_masking_token = False
             elif task == "mme":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mme/arrays"
                 self.model.sam2_masking_token = True
@@ -378,22 +378,19 @@ class Llava(lmms):
                 for idx, visual in enumerate(batched_visuals):
                     image_id = visual[-1]
 
-                    print("visual", visual)
+                    # print("visual", visual)
 
                     mask_files = self.find_mask_files(
                         base_dir=base_dir,
                         image_id=image_id,
                     )
                     masks = self.read_mask_arrays(mask_files)
-                    print("len(masks)", len(masks))
-                    if len(masks) > 1:
+                    # print("len(masks)", len(masks))
+                    if len(masks) >= 1:
                         masks = [torch.from_numpy(mask_np).to(self.model.device) for mask_np in masks]
                         masks = torch.stack(masks).unsqueeze(0)
-
-                        if masks.shape[1] < 30:
-                            self.model.sam2_masking_token = True
-                        else:
-                            self.model.sam2_masking_token = False
+                    elif len(masks) == 0 and self.config.mm_projector_type == "subobject_tokenization":
+                        masks = torch.stack([torch.ones(visual[0].size, dtype=torch.bool)]).unsqueeze(0)
                     else:
                         self.model.sam2_masking_token = False
 

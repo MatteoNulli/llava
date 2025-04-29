@@ -21,7 +21,10 @@ import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 
 from .multimodal_encoder.builder import build_vision_tower
-from .multimodal_projector.builder import build_vision_projector
+from .multimodal_projector.builder import (
+    build_vision_projector,
+    build_subobject_vision_projector,
+)
 from .subobject_tokenization_utils import VisualTokenEmbedding
 from .masking_utils import MaskEmbedder, BatchedMaskEmbedder
 
@@ -56,6 +59,9 @@ class LlavaMetaModel:
         if hasattr(config, "mm_vision_tower"):
             self.vision_tower = build_vision_tower(config, delay_load=True)
             self.mm_projector = build_vision_projector(config)
+            # self.config.mm_projector_type = "mlp2x_gelu,subobject_tokenization"
+            # if self.config.mm_projector_type == "mlp2x_gelu,subobject_tokenization":
+            #     self.mm_subobject_projector = build_subobject_vision_projector(config)
 
             if "unpad" in getattr(config, "mm_patch_merge_type", ""):
                 self.image_newline = nn.Parameter(
@@ -105,7 +111,6 @@ class LlavaMetaModel:
 
         if getattr(self, "mm_projector", None) is None:
             self.mm_projector = build_vision_projector(self.config)
-
             if "unpad" in mm_patch_merge_type:
                 embed_std = 1 / torch.sqrt(
                     torch.tensor(self.config.hidden_size, dtype=self.dtype)
@@ -156,10 +161,16 @@ class LlavaMetaModel:
 
         else:
             print("Radomly Initializing mm_bom_mask_token")
-            projector_input_features = self.mm_projector[0].in_features
-            self.mm_bom_mask_token = BOMMaskToken(
-                projector_input_features, self.dtype, device="cuda"
-            )
+            if self.config.mm_projector_type == "mlp2x_gelu,subobject_tokenization":
+                projector_input_features = self.mm_projector[0][0].in_features
+                self.mm_bom_mask_token = BOMMaskToken(
+                    projector_input_features, self.dtype, device="cuda"
+                )
+            else:
+                projector_input_features = self.mm_projector[0].in_features
+                self.mm_bom_mask_token = BOMMaskToken(
+                    projector_input_features, self.dtype, device="cuda"
+                )
 
 
 def unpad_image(tensor, original_size):
@@ -216,8 +227,64 @@ class LlavaMetaForCausalLM(ABC):
         ## B.O. MASKING PART
         if (
             masking
+            and masks is not None
             and any(torch.any(mask != 0).item() for mask in masks)
-            and not self.config.mm_projector_type == "subobject_tokenization"
+            and self.config.mm_projector_type == "mlp2x_gelu,subobject_tokenization"
+        ):
+            global_view = False
+            averaging = False
+            mask_removing = False
+            mask_limiting = False
+            mask_limit = 20
+            averaging_global_view = False
+            no_masktoken = False
+            use_sliding_window = False
+            use_dummy_masks = False
+
+            mask_embedder = MaskEmbedder(
+                model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
+                get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM) (contains bom_mask_token at train time) ## to fix this.
+                config=self.config,
+                vision_tower=self.get_model().get_vision_tower(),
+                global_view=global_view,
+                averaging=averaging,
+                mask_removing=mask_removing,
+                mask_limiting=mask_limiting,
+                mask_limit=mask_limit,
+                averaging_global_view=averaging_global_view,
+                no_masktoken=no_masktoken,
+                use_sliding_window=use_sliding_window,
+                use_dummy_masks=use_dummy_masks,
+            )
+
+            image_features, zero_indices = mask_embedder(images, masks)
+            image_features = image_features.to(images.dtype).to(images.device)
+            image_features = self.get_model().mm_projector(image_features)
+
+            if len(zero_indices) > 0:
+                visual_token_embedding = VisualTokenEmbedding(
+                    model=self,
+                    get_model=self.get_model(),
+                    config=self.config,
+                    vision_tower=self.get_model().get_vision_tower(),
+                )
+
+                visual_token_embeds, _, _ = (
+                    visual_token_embedding.prepare_visual_embeds(images, masks)
+                )
+                tokens_to_add = visual_token_embeds[
+                    :, zero_indices, :
+                ]  # shape [B, x, 4096], where x is the number of masks which, when downsampled have zero True values (too small object).
+                # concatenate along the “token” dimension (dim=1)
+                new_image_features = torch.cat([image_features, tokens_to_add], dim=1)
+
+            return image_features
+
+        elif (
+            masking
+            and "subobject_tokenization" not in self.config.mm_projector_type
+            and masks is not None
+            and any(torch.any(mask != 0).item() for mask in masks)
         ):
             # image features are extracted inside MaskEmbedder.
 
@@ -229,13 +296,20 @@ class LlavaMetaForCausalLM(ABC):
             averaging_global_view = False
             no_masktoken = False
             use_sliding_window = True
+            number_of_masks = 5
             use_dummy_masks = False
 
-            # self.config.batched_masking = True
-            if hasattr(self.config, "batched_masking"):
+            self.config.batched_masking = False
+            if (
+                hasattr(self.config, "batched_masking")
+                and self.config.batched_masking == True
+            ):
+                raise NotImplementedError(
+                    "Batched Mask Embedder still does not work. Please select a different embedding mechanism."
+                )
                 mask_embedder = BatchedMaskEmbedder(
-                    model=self,
-                    get_model=self.get_model(),
+                    model=self,  ## LlavaLlamaForCausalLM (contains lm_head for prediction and bom_mask_token at inference time)
+                    get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM)
                     config=self.config,
                     vision_tower=self.get_model().get_vision_tower(),
                     global_view=global_view,
@@ -247,11 +321,12 @@ class LlavaMetaForCausalLM(ABC):
                     no_masktoken=no_masktoken,
                     use_sliding_window=use_sliding_window,
                     use_dummy_masks=use_dummy_masks,
+                    number_of_masks=number_of_masks,
                 )
             else:
                 mask_embedder = MaskEmbedder(
-                    model=self,
-                    get_model=self.get_model(),
+                    model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
+                    get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM) (contains bom_mask_token at train time) ## to fix this.
                     config=self.config,
                     vision_tower=self.get_model().get_vision_tower(),
                     global_view=global_view,
@@ -263,10 +338,13 @@ class LlavaMetaForCausalLM(ABC):
                     no_masktoken=no_masktoken,
                     use_sliding_window=use_sliding_window,
                     use_dummy_masks=use_dummy_masks,
+                    number_of_masks=number_of_masks,
                 )
 
-            image_features = mask_embedder(images, masks).to(images.dtype)
+            image_features, _ = mask_embedder(images, masks)
+            image_features = image_features.to(images.dtype).to(images.device)
             ## E.O. MASKING PART
+
             image_features = self.get_model().mm_projector(image_features)
 
             return image_features
@@ -285,10 +363,10 @@ class LlavaMetaForCausalLM(ABC):
             return visual_token_embeds
         elif not masking and self.config.mm_projector_type == "subobject_tokenization":
             raise ValueError(
-                f"Cannot have masking={masking} and mm_projector_type={self.config.mm_projector_type}"
+                f"Cannot have masking={masking} and mm_projector_type={self.config.mm_projector_type} with positive number of masks"
             )
         else:
-            image_features = self.get_model().get_vision_tower(images)
+            image_features = self.get_model().get_vision_tower()(images)
             # image_features = self.get_model().vision_resampler(image_features, images=images)
 
             image_features = self.get_model().mm_projector(image_features)

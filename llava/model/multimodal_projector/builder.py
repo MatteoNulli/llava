@@ -32,31 +32,31 @@ class SimpleResBlock(nn.Module):
 def build_vision_projector(config, delay_load=False, **kwargs):
     projector_type = getattr(config, "mm_projector_type", "linear")
 
-    if projector_type == "subobject_tokenization":
-        # implementation from https://github.com/ChenDelong1999/subobjects-VLM/blob/main
-        config.token_roi_resolution = 32  # token roi resolution from https://github.com/ChenDelong1999/subobjects-VLM/blob/main/configs/visual_embedding/clip_vit_l_14_336.json
-        feature_channels = config.mm_hidden_size
-        mlp_expansion = 4
-        projector = nn.Sequential(
-            nn.Linear(
-                4 + feature_channels + config.token_roi_resolution**2,
-                config.hidden_size,
-                bias=config.mlp_bias,
-            ),
-            nn.ReLU(),
-            nn.Linear(
-                config.hidden_size,
-                config.hidden_size * mlp_expansion,
-                bias=config.mlp_bias,
-            ),
-            nn.ReLU(),
-            nn.Linear(
-                config.hidden_size * mlp_expansion,
-                config.hidden_size,
-                bias=config.mlp_bias,
-            ),
-        )
-        return projector
+    # if projector_type == "subobject_tokenization":
+    #     # implementation from https://github.com/ChenDelong1999/subobjects-VLM/blob/main
+    #     config.token_roi_resolution = 32  # token roi resolution from https://github.com/ChenDelong1999/subobjects-VLM/blob/main/configs/visual_embedding/clip_vit_l_14_336.json
+    #     feature_channels = config.mm_hidden_size
+    #     mlp_expansion = 4
+    #     projector = nn.Sequential(
+    #         nn.Linear(
+    #             4 + feature_channels + config.token_roi_resolution**2,
+    #             config.hidden_size,
+    #             bias=config.mlp_bias,
+    #         ),
+    #         nn.ReLU(),
+    #         nn.Linear(
+    #             config.hidden_size,
+    #             config.hidden_size * mlp_expansion,
+    #             bias=config.mlp_bias,
+    #         ),
+    #         nn.ReLU(),
+    #         nn.Linear(
+    #             config.hidden_size * mlp_expansion,
+    #             config.hidden_size,
+    #             bias=config.mlp_bias,
+    #         ),
+    #     )
+    #     return projector
 
     if projector_type == "linear":
         return nn.Linear(config.mm_hidden_size, config.hidden_size)
@@ -74,3 +74,30 @@ def build_vision_projector(config, delay_load=False, **kwargs):
         return IdentityMap()
 
     raise ValueError(f"Unknown projector type: {projector_type}")
+
+
+def build_subobject_vision_projector(config, delay_load=False, **kwargs):
+    # implementation from https://github.com/ChenDelong1999/subobjects-VLM/blob/main
+    config.token_roi_resolution = 32  # token roi resolution from https://github.com/ChenDelong1999/subobjects-VLM/blob/main/configs/visual_embedding/clip_vit_l_14_336.json
+    feature_channels = config.mm_hidden_size
+    mlp_expansion = 4
+    projector = nn.Sequential(
+        nn.Linear(
+            4 + feature_channels + config.token_roi_resolution**2,
+            config.hidden_size,
+            bias=config.mlp_bias,
+        ),
+        nn.ReLU(),
+        nn.Linear(
+            config.hidden_size,
+            config.hidden_size * mlp_expansion,
+            bias=config.mlp_bias,
+        ),
+        nn.ReLU(),
+        nn.Linear(
+            config.hidden_size * mlp_expansion,
+            config.hidden_size,
+            bias=config.mlp_bias,
+        ),
+    )
+    return projector

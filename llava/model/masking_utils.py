@@ -99,47 +99,69 @@ def downsample_mask_to_1d_counts(
     return downsampled_mask
 
 
-def create_deterministic_dummy_masks(shape, num_masks=10, seed=42):
+def create_deterministic_dummy_masks(
+    shape,
+    num_masks: int = 10,
+    seed: int = 42,
+    *,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype = torch.bool,
+) -> list[torch.Tensor]:
     """
-    Creates a binary tensor (array of 1s and 0s) with a deterministic random pattern.
+    Generate `num_masks` binary (0/1 or bool) **torch Tensor** masks with a
+    deterministic pattern and return them as a *list* (no numpy arrays).
 
-    Parameters:
-    - shape: Integer or tuple of integers defining the shape of the tensor
-            (e.g., 576 for a 1D array or (24, 24) for a 2D array)
-    - seed: Random seed to ensure reproducibility (default: 42)
+    Parameters
+    ----------
+    shape : int | tuple[int, ...]
+        Shape of each individual mask.  A single int is treated as a 1‑D length.
+    num_masks : int, default 10
+        How many masks to create.
+    seed : int, default 42
+        Base seed for reproducibility.  Each mask gets `seed + i` so they differ
+        while remaining deterministic across runs.
+    device : torch.device | str | None, optional
+        Where to place the tensors (e.g. `"cuda"`).  `None` → current default device.
+    dtype : torch.dtype, default torch.bool
+        Data type of the mask elements.  Use `torch.uint8` or `torch.int8`
+        if you prefer 0/1 integers.
 
-    Returns:
-    - A numpy array with the specified shape filled with random 1s and 0s
+    Returns
+    -------
+    list[torch.Tensor]
+        A Python list containing `num_masks` tensors of identical shape.
     """
-    # Convert shape to tuple if it's a single integer
+    # Normalise shape
     if isinstance(shape, int):
         shape = (shape,)
 
-    # Set the random seed to ensure deterministic results
-    masks = []
+    masks: list[torch.Tensor] = []
+
     for i in range(num_masks):
-        # Set the random seed to ensure deterministic results
-        np.random.seed(seed)
-        # Generate a binary tensor with random 1s and 0s
-        # Generate a boolean tensor with random True and False values
-        boolean_tensor = np.random.choice([True, False], size=shape)
-        masks.append(boolean_tensor)
+        gen = torch.Generator(device=device)
+        gen.manual_seed(seed)  # deterministic but unique
+        # Draw random 0/1 integers and cast to the requested dtype
+        mask = torch.randint(0, 2, shape, generator=gen, device=device).to(dtype)
+        masks.append(mask)
 
-    return np.array(masks)
+    return masks
 
 
-def create_sliding_masks(ve_dim, num_masks=10):
+def create_sliding_masks(ve_dim, dtype=torch.bool, device="cuda", num_masks=10):
     masks = []
     patch_size = ve_dim // num_masks
     for i in range(num_masks):
-        mask = np.zeros(ve_dim, dtype=bool)
         # For the last mask, include any remainder
+        mask = torch.zeros(ve_dim, dtype=dtype, device=device)
+
+        # compute slice (include any remainder on the final mask)
         start = i * patch_size
         end = (i + 1) * patch_size if i < num_masks - 1 else ve_dim
-        mask[start:end] = True
+
+        mask[start:end] = True  # set active window
         masks.append(mask)
 
-    return np.array(masks)
+    return masks
 
 
 class BatchedMaskEmbedder(torch.nn.Module):
@@ -159,6 +181,7 @@ class BatchedMaskEmbedder(torch.nn.Module):
         no_masktoken=False,
         use_sliding_window=False,
         use_dummy_masks=False,
+        number_of_masks=10,
     ):
         super(BatchedMaskEmbedder, self).__init__()
 
@@ -179,6 +202,7 @@ class BatchedMaskEmbedder(torch.nn.Module):
         # bool values for ablations
         self.use_sliding_window = use_sliding_window
         self.use_dummy_masks = use_dummy_masks
+        self.number_of_masks = number_of_masks
 
         # other
         self.mask_limit = mask_limit
@@ -223,14 +247,26 @@ class BatchedMaskEmbedder(torch.nn.Module):
         if self.use_sliding_window:
             resized_image_masks = torch.stack(
                 [
-                    torch.tensor(create_sliding_masks(ve_dim, num_masks=10))
+                    torch.tensor(
+                        create_sliding_masks(
+                            ve_dim,
+                            device=images_features.device,
+                            num_masks=self.number_of_masks,
+                        )
+                    )
                     for i in range(batch_size)
                 ]
             ).to(images_features.device)
         elif self.use_dummy_masks:
             resized_image_masks = torch.stack(
                 [
-                    torch.tensor(create_deterministic_dummy_masks(ve_dim, num_masks=10))
+                    torch.tensor(
+                        create_deterministic_dummy_masks(
+                            ve_dim,
+                            device=images_features.device,
+                            num_masks=self.number_of_masks,
+                        )
+                    )
                     for i in range(batch_size)
                 ]
             ).to(images_features.device)
@@ -261,6 +297,17 @@ class BatchedMaskEmbedder(torch.nn.Module):
         Returns:
             torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, M, y, feature_dim), where y varies based on the method / number of masks for each image and number of True values per mask.
         """
+        if self.global_view:
+            ## include a mask which is f
+            whole_image_mask = torch.ones(
+                (batch_size, 1, ve_dim),
+                dtype=resized_image_masks.dtype,
+                device=resized_image_masks.device,
+            )
+            resized_image_masks = torch.cat(
+                [whole_image_mask, resized_image_masks], dim=1
+            )
+
         batch_size, M, ve_dim = tuple(resized_image_masks.shape)
         F = images_features.shape[-1]  # aka feature_dim
 
@@ -271,7 +318,7 @@ class BatchedMaskEmbedder(torch.nn.Module):
         )  # scalar (largest number of True values)
 
         # 2. Expand images_features so that each mask sees [ve_dim, F]:
-        #    From [B, ve_dim, F] → [B, 1, ve_dim, F] and then expand to [B, M, ve_dim, F]
+        #    From [B, ve_dim, F] --> [B, 1, ve_dim, F] and then expand to [B, M, ve_dim, F]
         image_features_expanded = images_features.unsqueeze(1).expand(
             batch_size, M, ve_dim, F
         )
@@ -316,7 +363,6 @@ class BatchedMaskEmbedder(torch.nn.Module):
         valid_mask = positions < counts.unsqueeze(-1)  # shape: [B, M, max_count]
         # Finally Apply the valid_mask along the feature dimension.
         no_tokens_features = selected_features * valid_mask.unsqueeze(-1).float()
-
         return no_tokens_features
 
     def add_visual_tokens(self, no_tokens_features):
@@ -374,9 +420,13 @@ class BatchedMaskEmbedder(torch.nn.Module):
         no_tokens_features = self.apply_masks(images_features, downsampled_masks)
 
         ## Add bom tokens
-        final_features = self.add_visual_tokens(no_tokens_features)
-
-        return final_features
+        if self.no_masktoken:
+            return no_tokens_features.view(
+                no_tokens_features.size(0), -1, no_tokens_features.size(3)
+            )
+        else:
+            final_features = self.add_visual_tokens(no_tokens_features)
+            return final_features
 
 
 class MaskEmbedder(torch.nn.Module):
@@ -396,6 +446,7 @@ class MaskEmbedder(torch.nn.Module):
         no_masktoken=False,
         use_sliding_window=False,
         use_dummy_masks=False,
+        number_of_masks=10,
     ):
         super(MaskEmbedder, self).__init__()
 
@@ -416,6 +467,7 @@ class MaskEmbedder(torch.nn.Module):
         # bool values for ablations
         self.use_sliding_window = use_sliding_window
         self.use_dummy_masks = use_dummy_masks
+        self.number_of_masks = number_of_masks
 
         # other
         self.mask_limit = mask_limit
@@ -445,24 +497,22 @@ class MaskEmbedder(torch.nn.Module):
         # print("images_batch", images_batch)
 
         batched_features = []
+        zero_indices = []
         for i, (image_features, image_masks) in enumerate(
             zip(images_batch, masks_batch)
         ):
 
             # Get image features shape (batch_size, ve_dim, feature_dim)
             ve_dim, feature_dim = image_features.shape
-            torch.set_printoptions(threshold=image_masks[0].numel())
+            # torch.set_printoptions(threshold=image_masks[0].numel())
 
-            # print("image_masks[0].shape", image_masks[0].shape)
-
-            # print("image_masks[0]", image_masks[0])
-            # print("image_masks[1]", image_masks[1])
-            # print("image_masks[2]", image_masks[2])
             if self.use_sliding_window:
-                resized_image_masks = create_sliding_masks(ve_dim, num_masks=10)
+                resized_image_masks = create_sliding_masks(
+                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
+                )
             elif self.use_dummy_masks:
                 resized_image_masks = create_deterministic_dummy_masks(
-                    ve_dim, num_masks=10
+                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
                 )
             else:
                 resized_image_masks = [
@@ -470,10 +520,14 @@ class MaskEmbedder(torch.nn.Module):
                     for mask in image_masks
                 ]
 
+            for j, t in enumerate(resized_image_masks):
+                if t.count_nonzero().item() == 0:
+                    zero_indices.append(j)
+
             # print("resized_image_masks[0]", resized_image_masks[1])
             # print("resized_image_masks[0]", resized_image_masks[2])
 
-            image_features = image_features.to(images_batch.device)
+            image_features = image_features.to(image_features.device)
 
             if self.mask_removing and len(resized_image_masks) > self.mask_limit:
                 masked_features = []
@@ -496,7 +550,7 @@ class MaskEmbedder(torch.nn.Module):
                 and not self.averaging_global_view
                 and not self.no_masktoken
             ):
-                if hasattr(self.get_model, "mm_bom_mask_token"):
+                if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
                     masked_with_tokens = torch.cat(
                         [image_features]
                         + [
@@ -511,7 +565,7 @@ class MaskEmbedder(torch.nn.Module):
                         ],
                         dim=0,
                     )
-                else:
+                else:  # during inference
                     masked_with_tokens = torch.cat(
                         [image_features]
                         + [
@@ -531,7 +585,7 @@ class MaskEmbedder(torch.nn.Module):
                 and self.averaging_global_view
                 and not self.no_masktoken
             ):
-                if hasattr(self.get_model, "mm_bom_mask_token"):
+                if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
                     masked_with_tokens = torch.cat(
                         [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
                         + [
@@ -547,7 +601,7 @@ class MaskEmbedder(torch.nn.Module):
                         dim=0,
                     )
 
-                else:
+                else:  # during inference
                     masked_with_tokens = torch.cat(
                         [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
                         + [
@@ -647,7 +701,7 @@ class MaskEmbedder(torch.nn.Module):
 
         final_output = torch.stack(batched_features).to(images_batch.device)
 
-        return final_output
+        return final_output, zero_indices
 
     def forward(self, images, masks):
         """
@@ -665,6 +719,8 @@ class MaskEmbedder(torch.nn.Module):
         images_features = self.vision_encoder(images)
 
         ## apply masks with bom tokens
-        output_features = self.apply_masks_with_tokens(images_features, masks)
+        output_features, zero_indices = self.apply_masks_with_tokens(
+            images_features, masks
+        )
 
-        return output_features
+        return output_features, zero_indices

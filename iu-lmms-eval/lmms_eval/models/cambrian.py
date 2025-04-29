@@ -308,14 +308,14 @@ class Cambrian(lmms):
                 if term:
                     text_outputs = text_outputs.split(term)[0]
 
-            print(text_outputs)
+            print("text_outputs", text_outputs)
             res.append(text_outputs)
 
-            for visual_path in visual_paths:
-                try:
-                    os.remove(visual_path)
-                except OSError:
-                    pass
+            # for visual_path in visual_paths:
+            #     try:
+            #         os.remove(visual_path)
+            #     except OSError:
+            #         pass
 
             pbar.update(1)
 

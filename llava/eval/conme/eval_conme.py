@@ -14,7 +14,7 @@ import base64
 import math
 import glob
 
-
+import inspect
 import json
 import argparse
 import pandas as pd
@@ -172,18 +172,16 @@ def load_generative_model(args, device):
         model.to(dtype=torch.bfloat16)
 
     elif "sa2va" in args.model_path.lower():
-
-        model = (
-            AutoModel.from_pretrained(
-                args.model_path,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-                use_flash_attn=True,
-                trust_remote_code=True,
-            )
-            .eval()
-            .cuda()
-        )
+        print(f"Loading sa2va from {args.model_path}")
+        model = AutoModel.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            use_flash_attn=True,
+            trust_remote_code=True,
+            device_map="cuda:0",
+            device="cuda:0",
+        ).eval()
 
         tokenizer = AutoTokenizer.from_pretrained(
             args.model_path, trust_remote_code=True, use_fast=False
@@ -193,15 +191,15 @@ def load_generative_model(args, device):
     elif "llava-hf" in args.model_path.lower():
         from transformers import AutoProcessor, LlavaForConditionalGeneration
 
-        model = (
-            LlavaForConditionalGeneration.from_pretrained(
-                args.model_path,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-            )
-            .eval()
-            .cuda()
-        )
+        print(f"Loading LLaVa-hf from {args.model_path}")
+
+        model = LlavaForConditionalGeneration.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            device_map="cuda:0",
+        ).eval()
+        model = model.to("cuda:0")
 
         processor = AutoProcessor.from_pretrained(args.model_path)
         tokenizer = None
@@ -329,12 +327,19 @@ def eval(args):
                         ]
                         masks = torch.stack(masks).unsqueeze(0)
 
-                        if masks.shape[1] < 20:
-                            model.sam2_masking_token = True
-                        else:
-                            model.sam2_masking_token = False
                     else:
-                        model.sam2_masking_token = False
+                        # print(f"Failed to read mask files for image {image_id}, and image_file {image_file}")
+                        masks = torch.stack(
+                            [torch.zeros(3, 3), torch.zeros(3, 3)]
+                        ).unsqueeze(0)
+
+                    # if masks.shape[1] < 20:
+                    #     model.sam2_masking_token = True
+                    # else:
+                    #     model.sam2_masking_token = False
+                    # print(masks.shape)
+                    # else:
+                    #     model.sam2_masking_token = False
 
                     # # print("image", image)
                     # image_pil = Image.open(image).convert("RGB")
@@ -506,7 +511,7 @@ def eval(args):
 
                 elif "sa2va" in args.model_path.lower():
 
-                    image = Image.open(io.BytesIO(image)).convert("RGB")
+                    image = Image.open(image).convert("RGB")
 
                     question = "<image>" + question
 
@@ -539,18 +544,31 @@ def eval(args):
                     prompt = processor.apply_chat_template(
                         conversation, add_generation_prompt=True
                     )
-                    # print("prompt", prompt)
+                    print("prompt", prompt)
 
-                    inputs = processor(
-                        images=image, text=prompt, return_tensors="pt"
-                    ).to(0, torch.float16)
+                    inputs = (
+                        processor(images=image, text=prompt, return_tensors="pt")
+                        .to(torch.float16)
+                        .to(device)
+                    )
+
+                    if len(inputs["pixel_values"].shape) > 4:
+                        inputs["pixel_values"] = inputs["pixel_values"].squeeze(0)
+
+                    allowed = set(inspect.signature(model.forward).parameters)
+                    gen_inputs = {k: v for k, v in inputs.items() if k in allowed}
+
+                    for key in list(gen_inputs.keys()):
+                        if str(gen_inputs[key].device) != "cuda:0":
+                            gen_inputs[key] = gen_inputs[key].to(device)
 
                     output = model.generate(
-                        **inputs, max_new_tokens=200, do_sample=False
+                        **gen_inputs, max_new_tokens=200, do_sample=False
                     )
+
                     outputs = processor.decode(
                         output[0], skip_special_tokens=True
-                    ).split("ASSISTANT:")[1]
+                    ).split("assistant")[-1]
                     # print("outputs", outputs)
                 else:
                     question = "<image>" + question

@@ -287,7 +287,7 @@ class VisualTokenEmbedding(torch.nn.Module):
             features (torch.Tensor): Output features from the embedding. A tensor of shape (batch_size, number_of_masks, projector_input_features).
             n_visual_tokens (torch.Tensor): A tensor of shape (batch_size, ) containing the number of images in the batch.
         """
-
+        ## The pass to the vision encoder happens within the forward pass
         boxes, masks, features = self.forward(images, masks)
         # boxes:    (N, M, 4)
         # masks:    (N, M, token_roi_resolution, token_roi_resolution)
@@ -310,10 +310,15 @@ class VisualTokenEmbedding(torch.nn.Module):
         # concat
         visual_token_embeds = torch.cat((box_embeds, mask_embeds, features), dim=-1)
         # project
-        visual_token_embeds = (
-            self.get_model.mm_projector(visual_token_embeds) * not_padding
-        )
-
+        if hasattr(self.get_model, "mm_subobject_projector"):
+            visual_token_embeds = (
+                self.get_model.mm_subobject_projector(visual_token_embeds) * not_padding
+            )
+        else:
+            visual_token_embeds = (
+                self.get_model.mm_projector(visual_token_embeds) * not_padding
+            )
+ 
         return (
             visual_token_embeds,
             features,

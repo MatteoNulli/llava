@@ -1379,10 +1379,12 @@ class LazySupervisedDataset(Dataset):
             ]
 
         if len(masks) > 0:
-            data_dict["masks"] = torch.stack(masks)
+            data_dict["masks"] = torch.stack(masks).to(image[0][0].device)
         else:
             # print(f"Failed to read mask files for image {image_id}, and image_file {image_file}")
-            data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)])
+            data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)]).to(
+                image[0][0].device
+            )
 
         return data_dict
 
@@ -1649,10 +1651,10 @@ def train(attn_implementation=None):
                     vision_tower.to(torch.bfloat16)
                 if training_args.fp16:
                     vision_tower.to(torch.float16)
-            print(
-                "find_all_linear_names_vision(vision_tower.vision_tower.vision_model)",
-                find_all_linear_names_vision(vision_tower.vision_tower.vision_model),
-            )
+            # print(
+            #     "find_all_linear_names_vision(vision_tower.vision_tower.vision_model)",
+            #     find_all_linear_names_vision(vision_tower.vision_tower.vision_model),
+            # )
             rank0_print("Adding LoRA adapters to base Vision Tower...")
             vision_tower = get_peft_model(vision_tower, lora_config)
             vision_tower.print_trainable_parameters()
@@ -1684,8 +1686,13 @@ def train(attn_implementation=None):
         )
         if model_args.tune_mm_mlp_adapter:
             model.requires_grad_(False)
-            for p in model.get_model().mm_projector.parameters():
-                p.requires_grad = True
+            if model.config.mm_projector_type == "subobject_tokenization":
+                for p in model.get_model().mm_subobject_projector.parameters():
+                    p.requires_grad = True
+
+            else:
+                for p in model.get_model().mm_projector.parameters():
+                    p.requires_grad = True
 
         model.config.freeze_mm_mlp_adapter = training_args.freeze_mm_mlp_adapter
         if training_args.freeze_mm_mlp_adapter:
