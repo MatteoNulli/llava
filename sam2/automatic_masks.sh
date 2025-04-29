@@ -1,0 +1,50 @@
+#!/bin/bash
+
+export http_proxy=http://httpproxy-tcop.vip.ebay.com:80 
+export https_proxy=http://httpproxy-tcop.vip.ebay.com:80 
+export no_proxy=krylov,ams,ems,mms,localhost,127.0.0.1,.vip.hadoop.ebay.com,.vip.ebay.com,github.ebay.com,.tess.io,.corp.ebay.com,.ebayc3.com,.qa.ebay.com,.dev.ebay.com
+export HTTP_PROXY=http://httpproxy-tcop.vip.ebay.com:80
+export HTTPS_PROXY=http://httpproxy-tcop.vip.ebay.com:80
+export NO_PROXY=krylov,ams,ems,mms,localhost,127.0.0.1,.vip.hadoop.ebay.com,.vip.ebay.com,github.ebay.com,.tess.io,.corp.ebay.com,.ebayc3.com,.qa.ebay.com,.dev.ebay.com
+
+
+pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 numpy==1.26.4
+pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 matplotlib
+# pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 sam2
+
+
+
+
+SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt
+DEVICE=cuda
+##Captioning
+echo creating masks for Captioning Data
+DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json
+ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_cap/arrays
+METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_cap/metadata
+CAPTIONING=True
+##SFT
+# echo creating masks for SFT Data
+# DATA_PATH=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/format_adjusted_llava-mix665k.json
+# ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_sft/arrays
+# METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_sft/metadata    
+# CAPTIONING=False
+
+PARTITION_ID=0
+TOTAL_PARTITIONS=10
+
+cd /opt/krylov-workflow/src/run_fn_0/
+
+MODEL_CFG=configs/sam2.1/sam2.1_hiera_l.yaml
+
+
+python automatic_mask_generator_llava.py \
+    --sam2_checkpoint $SAM2_CHECKPOINT \
+    --model_cfg $MODEL_CFG \
+    --device $DEVICE \
+    --metadata_directory $METADATA_DIR \
+    --arrays_directory $ARRAYS_DIR \
+    --data_path $DATA_PATH \
+    --total-partitions $TOTAL_PARTITIONS \
+    --partition-id $PARTITION_ID \
+    --captioning $CAPTIONING
