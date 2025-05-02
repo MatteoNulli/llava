@@ -16,9 +16,9 @@ NUM_GPUS=${NUM_GPUS:-2}
 
 cd iu-lmms-eval/
 
-TASK=realworldqa,textvqa_test,ai2d,mme,mmstar,mmbench_en_dev
+# TASK=realworldqa,textvqa_test,ai2d,mme,mmstar,mmbench_en_dev
 # TASK=mme,mmstar
-# TASK=cvbench,mmvp
+TASK=mmvp
 
 # if [[ "$TASK" =~ mmbench ]]; then
 #     pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 openpyxl

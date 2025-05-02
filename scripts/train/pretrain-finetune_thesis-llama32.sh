@@ -33,6 +33,8 @@ pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 cd /opt/krylov-workflow/src/run_fn_0/
 
 
+pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+
 
 # First job
 echo "Starting pretraining job..."
@@ -40,13 +42,15 @@ CAP_EPOCHS=1
 
 # MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 # MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
-MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
+# MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
+# MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
+MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
 MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
-##standard llava pretraining data
-# DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json
-## share gpt4v pretraining data
-DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/share_gpt4v_format_adjusted_share-captioner_coco_lcs_sam_1246k_1107.json
+#standard llava pretraining data
+DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json
+# ## share gpt4v pretraining data
+# DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/share_gpt4v_format_adjusted_share-captioner_coco_lcs_sam_1246k_1107.json
 IMG_DIR='None' 
 FILE_NAME_CAP=$(echo "${DATA_PATH##*/}" | cut -d'_' -f1,2)
 
@@ -63,54 +67,56 @@ BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NA
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
-mkdir -p $BASE_SAVE_DIR
+# mkdir -p $BASE_SAVE_DIR
 
-ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
-    llava/train/train_mem.py \
-    --deepspeed scripts/zero3.json \
-    --model_name_or_path $MODEL_DIR \
-    --version llama3 \
-    --data_path $DATA_PATH \
-    --image_folder $IMG_DIR \
-    --vision_tower $VIS_TOWER \
-    --mm_projector_type mlp2x_gelu \
-    --tune_mm_mlp_adapter True \
-    --mm_vision_select_layer -2 \
-    --mm_use_im_start_end False \
-    --mm_use_im_patch_token False \
-    --bf16 True \
-    --output_dir $BASE_SAVE_DIR \
-    --num_train_epochs $CAP_EPOCHS \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 4 \
-    --evaluation_strategy "no" \
-    --save_strategy "steps" \
-    --save_steps 24000 \
-    --save_total_limit 1 \
-    --learning_rate 1e-3 \
-    --weight_decay 0. \
-    --warmup_ratio 0.03 \
-    --lr_scheduler_type "cosine" \
-    --logging_steps 1 \
-    --tf32 True \
-    --model_max_length 2048 \
-    --gradient_checkpointing True \
-    --dataloader_num_workers 1 \
-    --lazy_preprocess True \
-    --report_to none \
-    --sam2_masking_token True \
-    --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
+# ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
+#     llava/train/train_mem.py \
+#     --deepspeed scripts/zero3.json \
+#     --model_name_or_path $MODEL_DIR \
+#     --version llama3 \
+#     --data_path $DATA_PATH \
+#     --image_folder $IMG_DIR \
+#     --vision_tower $VIS_TOWER \
+#     --mm_projector_type mlp2x_gelu \
+#     --tune_mm_mlp_adapter True \
+#     --mm_vision_select_layer -2 \
+#     --mm_use_im_start_end False \
+#     --mm_use_im_patch_token False \
+#     --bf16 True \
+#     --output_dir $BASE_SAVE_DIR \
+#     --num_train_epochs $CAP_EPOCHS \
+#     --per_device_train_batch_size 8 \
+#     --per_device_eval_batch_size 4 \
+#     --gradient_accumulation_steps 4 \
+#     --evaluation_strategy "no" \
+#     --save_strategy "steps" \
+#     --save_steps 24000 \
+#     --save_total_limit 1 \
+#     --learning_rate 1e-3 \
+#     --weight_decay 0. \
+#     --warmup_ratio 0.03 \
+#     --lr_scheduler_type "cosine" \
+#     --logging_steps 1 \
+#     --tf32 True \
+#     --model_max_length 2048 \
+#     --gradient_checkpointing True \
+#     --dataloader_num_workers 1 \
+#     --lazy_preprocess True \
+#     --report_to none \
+#     --sam2_masking_token True \
+#     --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
 
 
 
 # Second job
 echo "Starting finetuning job..."
-SFT_EPOCHS=3
+SFT_EPOCHS=1
 
 # MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 # MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
-MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
+# MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
+# MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
+MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
 MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
 DATA_PATH_SFT=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/llava_mix665k_format_adjusted.json

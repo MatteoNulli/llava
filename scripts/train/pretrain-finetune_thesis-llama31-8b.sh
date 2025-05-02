@@ -60,7 +60,7 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="dummy_masks_noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_RUN_NAME="image_filling-noglob-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
 BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
@@ -126,7 +126,7 @@ VIS_TOWER=/mnt/nushare2/data/baliao/multimodal/model_zoos/openai/clip-vit-large-
 VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
-SFT_RUN_NAME="dummy_masks_noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$CAP_EPOCHS-capEpochs-$SFT_EPOCHS-sftEpochs"
+SFT_RUN_NAME="image_filling-noglob-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$CAP_EPOCHS-capEpochs-$SFT_EPOCHS-sftEpochs"
 
 PROJECTOR=${BASE_SAVE_DIR}/mm_projector.bin
 MASK_TOKEN=${BASE_SAVE_DIR}/mm_bom_mask_token.bin

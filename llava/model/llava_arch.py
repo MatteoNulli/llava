@@ -225,21 +225,24 @@ class LlavaMetaForCausalLM(ABC):
             torch.Tensor: Image features outputted from multimodal projector.
         """
         ## B.O. MASKING PART
+        global_view = False
+        averaging = False
+        mask_removing = False
+        mask_limiting = False
+        mask_limit = 20
+        averaging_global_view = False
+        no_masktoken = False
+        use_sliding_window = False
+        number_of_masks = 5
+        use_dummy_masks = False
+        image_filling = False
+
         if (
             masking
             and masks is not None
             and any(torch.any(mask != 0).item() for mask in masks)
             and self.config.mm_projector_type == "mlp2x_gelu,subobject_tokenization"
         ):
-            global_view = False
-            averaging = False
-            mask_removing = False
-            mask_limiting = False
-            mask_limit = 20
-            averaging_global_view = False
-            no_masktoken = False
-            use_sliding_window = False
-            use_dummy_masks = False
 
             mask_embedder = MaskEmbedder(
                 model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
@@ -287,59 +290,23 @@ class LlavaMetaForCausalLM(ABC):
             and any(torch.any(mask != 0).item() for mask in masks)
         ):
             # image features are extracted inside MaskEmbedder.
-
-            global_view = False
-            averaging = False
-            mask_removing = False
-            mask_limiting = False
-            mask_limit = 20
-            averaging_global_view = False
-            no_masktoken = False
-            use_sliding_window = True
-            number_of_masks = 5
-            use_dummy_masks = False
-
-            self.config.batched_masking = False
-            if (
-                hasattr(self.config, "batched_masking")
-                and self.config.batched_masking == True
-            ):
-                raise NotImplementedError(
-                    "Batched Mask Embedder still does not work. Please select a different embedding mechanism."
-                )
-                mask_embedder = BatchedMaskEmbedder(
-                    model=self,  ## LlavaLlamaForCausalLM (contains lm_head for prediction and bom_mask_token at inference time)
-                    get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM)
-                    config=self.config,
-                    vision_tower=self.get_model().get_vision_tower(),
-                    global_view=global_view,
-                    averaging=averaging,
-                    mask_removing=mask_removing,
-                    mask_limiting=mask_limiting,
-                    mask_limit=mask_limit,
-                    averaging_global_view=averaging_global_view,
-                    no_masktoken=no_masktoken,
-                    use_sliding_window=use_sliding_window,
-                    use_dummy_masks=use_dummy_masks,
-                    number_of_masks=number_of_masks,
-                )
-            else:
-                mask_embedder = MaskEmbedder(
-                    model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
-                    get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM) (contains bom_mask_token at train time) ## to fix this.
-                    config=self.config,
-                    vision_tower=self.get_model().get_vision_tower(),
-                    global_view=global_view,
-                    averaging=averaging,
-                    mask_removing=mask_removing,
-                    mask_limiting=mask_limiting,
-                    mask_limit=mask_limit,
-                    averaging_global_view=averaging_global_view,
-                    no_masktoken=no_masktoken,
-                    use_sliding_window=use_sliding_window,
-                    use_dummy_masks=use_dummy_masks,
-                    number_of_masks=number_of_masks,
-                )
+            mask_embedder = MaskEmbedder(
+                model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
+                get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM) (contains bom_mask_token at train time) ## to fix this.
+                config=self.config,
+                vision_tower=self.get_model().get_vision_tower(),
+                global_view=global_view,
+                averaging=averaging,
+                mask_removing=mask_removing,
+                mask_limiting=mask_limiting,
+                mask_limit=mask_limit,
+                averaging_global_view=averaging_global_view,
+                no_masktoken=no_masktoken,
+                use_sliding_window=use_sliding_window,
+                use_dummy_masks=use_dummy_masks,
+                number_of_masks=number_of_masks,
+                image_filling=image_filling,
+            )
 
             image_features, _ = mask_embedder(images, masks)
             image_features = image_features.to(images.dtype).to(images.device)

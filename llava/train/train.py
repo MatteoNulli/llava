@@ -1378,6 +1378,13 @@ class LazySupervisedDataset(Dataset):
                 torch.from_numpy(mask_np).to(image[0][0].device) for mask_np in masks
             ]
 
+        #  if "ocr" in image_ids or "textvqa" in image_ids:
+        #     data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)]).to(
+        #         image[0][0].device
+        #     )
+
+        # elif not ("ocr" in image_ids or "textvqa" in image_ids) and
+        
         if len(masks) > 0:
             data_dict["masks"] = torch.stack(masks).to(image[0][0].device)
         else:

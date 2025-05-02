@@ -447,6 +447,7 @@ class MaskEmbedder(torch.nn.Module):
         use_sliding_window=False,
         use_dummy_masks=False,
         number_of_masks=10,
+        image_filling=False,
     ):
         super(MaskEmbedder, self).__init__()
 
@@ -471,6 +472,7 @@ class MaskEmbedder(torch.nn.Module):
 
         # other
         self.mask_limit = mask_limit
+        self.image_filling = image_filling
 
     @property
     def dtype(self):
@@ -520,9 +522,10 @@ class MaskEmbedder(torch.nn.Module):
                     for mask in image_masks
                 ]
 
-            for j, t in enumerate(resized_image_masks):
-                if t.count_nonzero().item() == 0:
-                    zero_indices.append(j)
+            # for j, t in enumerate(resized_image_masks):
+            #     if t.count_nonzero().item() == 0:
+            #         zero_indices.append(j)
+            # zero_indices = []
 
             # print("resized_image_masks[0]", resized_image_masks[1])
             # print("resized_image_masks[0]", resized_image_masks[2])
@@ -536,6 +539,19 @@ class MaskEmbedder(torch.nn.Module):
                     image_features[mask]
                     for mask in resized_image_masks[: self.mask_limit]
                 ]
+            elif self.image_filling:
+
+                covered = torch.stack(resized_image_masks, dim=0).any(dim=0)
+
+                # 2) invert to get the “uncovered” positions
+                uncovered = ~covered
+
+                # 3) if there really is anything uncovered, append it
+                if uncovered.any():
+                    resized_image_masks.append(uncovered)
+
+                # 4) now apply all masks (including the dummy one) to extract features
+                masked_features = [image_features[mask] for mask in resized_image_masks]
             else:
                 masked_features = [image_features[mask] for mask in resized_image_masks]
 

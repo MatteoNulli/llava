@@ -37,10 +37,13 @@ cd /opt/krylov-workflow/src/run_fn_0/
 echo "Starting pretraining job..."
 CAP_EPOCHS=1
 
-MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
-MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
+# MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
+# MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
 # MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
 # MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
+MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
+MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
+
 
 #standard llava pretraining data
 DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/test_blip_laion_cc_sbu_558k.json
@@ -58,7 +61,7 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="todel_subobj-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_RUN_NAME="todel-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
 BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
@@ -107,10 +110,12 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
 echo "Starting finetuning job..."
 SFT_EPOCHS=2
 
-MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
-MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
+# MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
+# MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
 # MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
 # MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
+MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
+MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
 DATA_PATH_SFT=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/llava_mix665k_format_adjusted.json
 IMG_DIR='None' 

@@ -171,6 +171,41 @@ def load_generative_model(args, device):
         )
         model.to(dtype=torch.bfloat16)
 
+    elif "cambrian" in args.model_path.lower():
+        cambrian_pth = os.path.abspath(
+            os.path.join(os.path.split(__file__)[0], "../../../cambrian")
+        )  # -> /data/chatgpt/notebooks/mnulli/llava/llava/eval/conme/ --> /data/chatgpt/notebooks/mnulli/llava/cambrian
+        print("cambrian_pth", cambrian_pth)
+        sys.path.append(f"{cambrian_pth}")
+
+        from cambrian.conversation import conv_templates
+        from cambrian.mm_utils import (
+            get_model_name_from_path,
+            process_images,
+            tokenizer_image_token,
+        )
+        from cambrian.model.builder import load_pretrained_model
+
+        pretrained = args.model_path
+        device = (
+            torch.device(f"cuda:{accelerator.local_process_index}")
+            if accelerator.num_processes > 1
+            else "cuda:0"
+        )
+
+        model_name = get_model_name_from_path(pretrained)
+        tokenizer, model, processor, context_len = load_pretrained_model(
+            pretrained, None, model_name, device_map=device
+        )
+
+        if "nyu-visionx--cambrian-8b" in model_name:
+            model_name = "cambrian-8b"
+        conv_mode = {
+            "cambrian-8b": "llama_3",
+            "cambrian-13b": "vicuna_v1",
+            "cambrian-34b": "chatml_direct",
+        }.get(model_name)
+
     elif "sa2va" in args.model_path.lower():
         print(f"Loading sa2va from {args.model_path}")
         model = AutoModel.from_pretrained(
@@ -197,9 +232,9 @@ def load_generative_model(args, device):
             args.model_path,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
-            device_map="cuda:0",
+            device_map="auto",
         ).eval()
-        model = model.to("cuda:0")
+        model = model.to("cuda")
 
         processor = AutoProcessor.from_pretrained(args.model_path)
         tokenizer = None

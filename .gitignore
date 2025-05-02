@@ -161,3 +161,6 @@ cython_debug/
 
 
 iu-lmms-eval/lmms_eval/tasks/ebench_sm_gen
+
+sam2/core*
+sam2/automatic_mask_generator_llava_ray.py
