@@ -177,8 +177,8 @@ def submit_task():
         task.mount_pvc("nushare2", "krylov-user-pvc-nlp-01", args.cluster)
 
     # task.add_directory(os.path.join(root_dir, "playground"))
-    print('root_dir', root_dir)
-    print('args.script', args.script)
+    print("root_dir", root_dir)
+    print("args.script", args.script)
     # task.add_directory(os.path.join(root_dir, "scripts"))
     task.add_directory(root_dir)
     # task.add_directory(os.path.join(root_dir, "sam2"))

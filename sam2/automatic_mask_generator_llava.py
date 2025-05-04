@@ -53,128 +53,19 @@ def sam2_instance(args):
 
 def data_instance(args):
     # '/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json'
-    data = json.load(open(args.data_path))
+    if not args.cambrian:
+        data = json.load(open(args.data_path))
+    else:
+        data = []
+        with open(args.data_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                data.append(record)
 
     return data
-
-
-@ray.remote(num_gpus=1)
-class MaskGeneratorActor:
-    def __init__(self, args, data_manager):
-        # Initialize your SAM2.1 mask generator here:
-        sam2 = build_sam2(
-            args.model_cfg,
-            args.sam2_checkpoint,
-            device=args.device,
-            apply_postprocessing=False,
-        )
-
-        self.generator = SAM2AutomaticMaskGenerator(
-            model=sam2,
-            points_per_batch=6,
-            pred_iou_thresh=0.9,
-            # stability_score_thresh=0.97,
-        )
-        self.data_manager = data_manager
-
-        gpu_id = ray.get_gpu_ids()[0]
-        self.device = torch.device(args.device)
-        # self.generator.to(self.device)
-        print(f"Actor initialized on GPU {gpu_id}")
-
-        self.args = args
-
-    def generate_save_masks(self, image: np.ndarray, image_key, metadata):
-        # return exactly what mask_generator.generate() does
-        print("image_key in actor", image_key)
-        masks = self.generator.generate(image)
-
-        # print(f"masks for image {image_key}, {len(masks)}")
-        processed_segmentations = []
-        for idx, seg in enumerate(masks):
-            # Create a copy of the segmentation data without the array
-            seg_metadata = seg.copy()
-
-            # Save the segmentation array as a .npy file
-            array_path = self.data_manager._get_array_path(image_key, idx)
-            # print("array_path", array_path)
-            self.data_manager._save_array(seg["segmentation"], array_path)
-            # Replace the array in metadata with the file path
-            seg_metadata["segmentation"] = os.path.basename(array_path)
-            processed_segmentations.append(seg_metadata)
-
-        # Save metadata
-        metadata[image_key] = processed_segmentations
-
-        # print("metadata.keys()", metadata.keys())
-
-        # Save updated metadata and backup
-        self.data_manager._safe_json_write(metadata, self.data_manager.metadata_file)
-
-        return f"Generated {len(masks)} for image {image_key}"
-
-
-def generate_masks_ray(args, data_manager):
-
-    ## RAY arguments
-    # Start Ray if not already running
-    if not ray.is_initialized():
-        ray.init(num_cpus=128, ignore_reinit_error=True)
-
-    # Detect how many GPUs we can use
-    available_gpus = int(ray.cluster_resources().get("GPU", 0))
-    available_cpus = int(ray.cluster_resources().get("CPU", 0))
-    print(
-        "ray.cluster_resources()",
-        "GPUS:",
-        available_gpus,
-        "CPUS:",
-        available_cpus,
-    )
-    # available_gpus = 1
-    num_actors = min(data_manager.total_partitions, available_gpus)
-
-    # Spawn one actor per GPU
-    mask_actors = [
-        MaskGeneratorActor.remote(args, data_manager) for _ in range(num_actors)
-    ]
-    actor_pool = cycle(mask_actors)
-
-    start_idx, end_idx = data_manager.get_partition_indices(len(data))
-    partition_data = data[start_idx:end_idx]
-
-    metadata, image_keys = data_manager.metadata_and_list_image_keys()
-    pending = []
-    for item in tqdm(
-        partition_data, desc=f"Processing partition {data_manager.partition_id}"
-    ):
-
-        image_key = data_manager._compute_image_key(item)  # your existing logic
-
-        # # Skip if already processed
-        # if image_key in image_keys:
-        #     continue
-
-        # load image once (shared file-system assumed)
-        img = Image.open(item["image"])
-        img_np = np.array(img.convert("RGB"))
-
-        pending.append(
-            next(actor_pool).generate_save_masks.remote(img_np, image_key, metadata)
-        )
-        # once we have, say, 20 outstanding calls, wait for one to finish
-        if len(pending) >= 20:
-            done, pending = ray.wait(pending, num_returns=1)
-            print(ray.get(done[0]))
-
-        # current_actor = next(actor_pool)
-
-        # futures.append(
-        #     current_actor.generate_save_masks.remote(img_np, image_key, metadata)
-        # )
-
-    for fut in tqdm(pending, desc="Draining…"):
-        print(ray.get(fut))
 
 
 class PartitionedSegmentationManager:
@@ -362,9 +253,9 @@ class PartitionedSegmentationManager:
             image_key = item["image"].split("images/", 1)[-1]
         elif self.cambrian:
             ## post-process for cambrian
-            raise NotImplementedError("Cambrian preprocessing not implemented")
-            ## depending on how the images are stored you might want to preserve part of the path to the image.
-            image_key = item["image"].strip()
+            image_key = item["image"].split("nyu-visionx--Cambrian-10M--extracted/", 1)[
+                -1
+            ]
         else:
             image_key = item["image"].strip(
                 "/mnt/nushare2/data/baliao/multimodal/data/"
@@ -420,44 +311,6 @@ class PartitionedSegmentationManager:
 
                 # Save updated metadata and backup
                 self._safe_json_write(metadata, self.metadata_file)
-
-            except Exception as e:
-                print(
-                    f"Error processing image {image_key} in partition {self.partition_id}: {str(e)}"
-                )
-                continue
-
-    def process_partition_ray(self, data: List[Dict[str, str]]) -> None:
-        """
-        Process only this partition's portion of the dataset.
-        """
-        start_idx, end_idx = self.get_partition_indices(len(data))
-        partition_data = data[start_idx:end_idx]
-
-        metadata, image_keys = self.metadata_and_list_image_keys()
-
-        for item in tqdm(
-            partition_data, desc=f"Processing partition {self.partition_id}"
-        ):
-
-            image_key = self._compute_image_key(item)  # your existing logic
-
-            # Skip if already processed
-            if image_key in image_keys:
-                continue
-
-            # load image once (shared file-system assumed)
-            img = Image.open(item["image"])
-            img_np = np.array(img.convert("RGB"))
-
-            # pick an actor in round-robin
-            current_actor = next(self.actor_pool)
-            # actor = self.mask_actors[self._next_actor]
-            # self._next_actor = (self._next_actor + 1) % len(self.mask_actors)
-            # print("current_actor", current_actor)
-            print("image_key in function", image_key)
-            try:
-                current_actor.generate_save_masks.remote(img_np, image_key, metadata)
 
             except Exception as e:
                 print(
@@ -709,12 +562,6 @@ if __name__ == "__main__":
         cambrian=args.cambrian,
     )
 
-    ## if using RAY
-    # manager.process_partition_ray(data)
-
-    generate_masks_ray(args, manager)
-
-    ## if not using RAY
-    # mask_generator = sam2_instance(args)
-    # manager.process_partition(data, mask_generator)
+    mask_generator = sam2_instance(args)
+    manager.process_partition(data, mask_generator)
     # manager.process_benchmark(args.benchmark_images_dir, mask_generator, _bytes=True)

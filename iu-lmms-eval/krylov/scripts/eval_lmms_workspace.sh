@@ -12,7 +12,7 @@
 
 PORT=${PORT:-"29501"}
 NUM_MACHINES=${NUM_MACHINES:-1}
-NUM_GPUS=${NUM_GPUS:-2}
+NUM_GPUS=${NUM_GPUS:-1}
 
 cd iu-lmms-eval/
 
@@ -52,8 +52,12 @@ CONV_MODE=llama3
 
 MODEL_ARGS=pretrained=$CKPT_PATH,model_base=$MODEL_BASE,conv_template=$CONV_MODE
 
-CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/nyu-visionx--cambrian-8b
-MODEL_NAME=cambrian
+# CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/nyu-visionx--cambrian-8b
+# MODEL_NAME=cambrian
+# MODEL_ARGS=pretrained=$CKPT_PATH
+
+CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
+MODEL_NAME=internvl2
 MODEL_ARGS=pretrained=$CKPT_PATH
 
 

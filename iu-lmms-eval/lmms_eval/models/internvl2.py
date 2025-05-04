@@ -50,7 +50,11 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
 
 
 def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnail=False):
-    orig_width, orig_height = image.size
+
+    if type(image) == str:
+        orig_width, orig_height = 224, 224
+    else:
+        orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
     # calculate the existing image aspect ratio
@@ -265,9 +269,9 @@ class InternVL2(lmms):
                 else:
                     pixel_values = None
                     num_patch_list = None
-                print('contexts', contexts)
+                print("contexts", contexts)
                 response, history = self.model.chat(self.tokenizer, pixel_values, contexts, gen_kwargs, num_patches_list=num_patches_list, history=None, return_history=True)
-                print('response', response)
+                print("response", response)
             elif self.modality == "video":
                 assert len(visuals) == 1, f"Only one video is supported, but got {len(visuals)} videos."
                 video_path = visuals[0]

@@ -1,11 +1,11 @@
 python submit.py \
-    changing_permissions.sh \
-    --ems_project thesis-train \
-    --experiment_name changing_permissions \
+    automatic_masks_cambrian.sh \
+    --ems_project thesis-training \
+    --experiment_name automatic_masks_cambrian \
     --cluster tess137 \
     -n chatgpt \
     -i hub.tess.io/vorshulevich/vllm:latest \
-    --gpu_per_node 1 \
+    --gpu_per_node 8 \
     --num_nodes 1 \
     --cpu 16 \
     --memory 128 \

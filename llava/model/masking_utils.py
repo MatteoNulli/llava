@@ -531,6 +531,9 @@ class MaskEmbedder(torch.nn.Module):
             # print("resized_image_masks[0]", resized_image_masks[2])
 
             image_features = image_features.to(image_features.device)
+            resized_image_masks = [
+                m.to(image_features.device).contiguous() for m in resized_image_masks
+            ]
 
             if self.mask_removing and len(resized_image_masks) > self.mask_limit:
                 masked_features = []
@@ -541,10 +544,21 @@ class MaskEmbedder(torch.nn.Module):
                 ]
             elif self.image_filling:
 
-                covered = torch.stack(resized_image_masks, dim=0).any(dim=0)
+                for m in resized_image_masks:
+                    assert m.dtype == torch.bool
+                    assert (
+                        m.shape[0] == image_features.shape[0]
+                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+
+                covered = (
+                    torch.stack(resized_image_masks, dim=0)
+                    .any(dim=0)
+                    .to(image_features.device)
+                )
 
                 # 2) invert to get the “uncovered” positions
                 uncovered = ~covered
+                uncovered = uncovered.to(image_features.device)
 
                 # 3) if there really is anything uncovered, append it
                 if uncovered.any():
