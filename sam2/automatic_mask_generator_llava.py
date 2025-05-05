@@ -17,6 +17,7 @@ import ray
 import time
 import torch
 import fire
+import ast
 
 from typing import Dict, Any, List, Union
 from tqdm import tqdm
@@ -248,11 +249,16 @@ class PartitionedSegmentationManager:
     def _compute_image_key(self, item):
         # Get image key
         ## The image key is going to be used as name to store the image masks inside the partition directory.
-        ## Your file system will look like /disklocation/segmentation_data/arrays/partition_i/image_key/mask_j.npy
+
+        ## TIP: change "images/","nyu-visionx--Cambrian-10M--extracted/" or "/mnt/nushare2/data/baliao/multimodal/data/"
+        ##      with the last element of the pth before the dataset informations (eg. 'coco/train2017/' or 'llava/llava_pretrain/images')
+
         if self.captioning:
+            ## Your file system will look like /disklocation/segmentation_data/arrays/partition_i/image_key/mask_j.npy
             image_key = item["image"].split("images/", 1)[-1]
         elif self.cambrian:
             ## post-process for cambrian
+            ## Your file system will look like /disklocation/segmentation_data/arrays/partition_i/image_key/000000012805_masks.npy containing all boolean segmentations
             image_key = item["image"].split("nyu-visionx--Cambrian-10M--extracted/", 1)[
                 -1
             ]
@@ -420,17 +426,11 @@ class PartitionedSegmentationManager:
                 total=len(benchmark_df),
             ):
 
-                if "filename" in row.keys():
-                    image_key = row["filename"]
-                    image = Image.open(io.BytesIO(row["image"]["bytes"]))
-
-                elif "mme" in benchmark_images_dir:
+                # if "filename" in row.keys():
+                #     image_key = row["filename"]
+                #     image = Image.open(io.BytesIO(row["image"]["bytes"]))
+                if "mme" in benchmark_images_dir:
                     image_key = row["question_id"]
-
-                    image = Image.open(io.BytesIO(row["image"]["bytes"]))
-
-                elif "aro" in benchmark_images_dir:
-                    image_key = f"picture_{i}"
 
                     image = Image.open(io.BytesIO(row["image"]["bytes"]))
 
@@ -442,6 +442,29 @@ class PartitionedSegmentationManager:
                 elif "mmstar" in benchmark_images_dir:
                     image_key = row["category"]
                     image = Image.open(io.BytesIO(row["image"])).convert("RGB")
+
+                elif "gowitheflow___aro-coco-order" in row["benchmark"]:
+                    image_key = f"gowitheflow___aro-coco-order_picture_{i}"
+                    image = Image.open(
+                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                    ).convert("RGB")
+                elif "gowitheflow___aro-flickr-order" in row["benchmark"]:
+                    image_key = f"gowitheflow___aro-flickr-order_picture_{i}"
+                    image = Image.open(
+                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                    ).convert("RGB")
+
+                elif "gowitheflow___aro-visual-relation" in row["benchmark"]:
+                    image_key = f"gowitheflow___aro-visual-relation_picture_{i}"
+                    image = Image.open(
+                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                    ).convert("RGB")
+
+                elif "gowitheflow___aro-visual-attribution" in row["benchmark"]:
+                    image_key = f"gowitheflow___aro-visual-attribution_picture__{i}"
+                    image = Image.open(
+                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                    ).convert("RGB")
 
                 image = np.array(image.convert("RGB"))
                 masks = mask_generator.generate(image)
@@ -512,13 +535,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_path",
         type=str,
-        default="/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json",
-        help="Path to data file",
+        nargs="?",  # 0 or 1 args
+        const="/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json",  # if flag is given but no value
+        default="/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json",  # if flag is omitted entirely
+        help=(
+            "Path to data file. "
+            "If you omit the flag or give it no value, "
+            "it will use the built-in default."
+        ),
     )
     parser.add_argument(
         "--benchmark_images_dir",
         type=str,
-        default="/mnt/nushare2/data/mnulli/thesis/data/benchmarks/conme/images",
+        nargs="?",  # 0 or 1 args
+        const="/mnt/nushare2/data/mnulli/thesis/data/benchmarks/conme/images",  # if flag is given but no value
+        default="/mnt/nushare2/data/mnulli/thesis/data/benchmarks/conme/images",  # if flag is omitted entirely
         help="Directory containing benchmark images",
     )
     parser.add_argument(
@@ -563,5 +594,5 @@ if __name__ == "__main__":
     )
 
     mask_generator = sam2_instance(args)
-    manager.process_partition(data, mask_generator)
-    # manager.process_benchmark(args.benchmark_images_dir, mask_generator, _bytes=True)
+    # manager.process_partition(data, mask_generator)
+    manager.process_benchmark(args.benchmark_images_dir, mask_generator, _bytes=True)

@@ -12,18 +12,12 @@ export NO_PROXY=krylov,ams,ems,mms,localhost,127.0.0.1,.vip.hadoop.ebay.com,.vip
 # pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 matplotlib
 # pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 sam2
 
-
-
-
-SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt
-DEVICE=cuda
-
 ## LLaVa Captioning
 # echo creating masks for Captioning Data
-DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json  ## PATH TO LLAVA Captioning JSON FILE (.json) 
-ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_try/arrays ## PATH TO STORED NPARRAYS WITH MASKS
-METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_try/metadata ## PATH TO STORED METADATA ABOUT MASKS 
-CAPTIONING=True ##FLAG FOR PROCESSING
+# DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json  ## PATH TO LLAVA Captioning JSON FILE (.json) 
+# ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_try/arrays ## PATH TO STORED NPARRAYS WITH MASKS
+# METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_try/metadata ## PATH TO STORED METADATA ABOUT MASKS 
+# CAPTIONING=True ##FLAG FOR PROCESSING
 
 ## LLaVa SFT
 # echo creating masks for SFT Data
@@ -43,17 +37,20 @@ CAPTIONING=True ##FLAG FOR PROCESSING
 
 
 ## BENCHMARKS
-# echo creating masks for Benchmarks Data "aro"
-# BENCHMARKS_IMAGES_DIR=/mnt/nushare2/data/mnulli/llava_ov/playground/gowitheflow___aro-visual-relation/combined
-# ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro-visual-relation/arrays
-# METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro-visual-relation/metadata
-# CAPTIONING=False ##FLAG FOR PROCESSING
+echo creating masks for Benchmarks Data "aro"
+BENCHMARKS_IMAGES_DIR=/mnt/nushare2/data/mnulli/llava_ov/playground/gowitheflow___aro-visual-relation/combined
+ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro/arrays
+METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro/metadata
+CAPTIONING=False ##FLAG FOR PROCESSING
 
 PARTITION_ID=0
 TOTAL_PARTITIONS=10
 
 cd /opt/krylov-workflow/src/run_fn_0/
 
+
+SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt
+DEVICE=cuda
 MODEL_CFG=configs/sam2.1/sam2.1_hiera_l.yaml
 
 
@@ -64,6 +61,7 @@ python automatic_mask_generator_llava.py \
     --metadata_directory $METADATA_DIR \
     --arrays_directory $ARRAYS_DIR \
     --data_path $DATA_PATH \
+    --benchmark_images_dir $BENCHMARKS_IMAGES_DIR \
     --total-partitions $TOTAL_PARTITIONS \
     --partition-id $PARTITION_ID \
     --captioning $CAPTIONING \

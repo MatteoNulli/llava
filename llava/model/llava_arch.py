@@ -235,7 +235,7 @@ class LlavaMetaForCausalLM(ABC):
         use_sliding_window = False
         number_of_masks = 5
         use_dummy_masks = False
-        image_filling = False
+        image_filling = True
 
         if (
             masking

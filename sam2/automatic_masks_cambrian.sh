@@ -15,9 +15,9 @@ pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 fire
 
 ## Cambrian SFT
 # echo creating masks for Cambrian SFT Data
-DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/nyu-visionx--Cambrian-10M--extracted/Cambrian7M_withsystemprompt.jsonl
-ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/arrays
-METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/metadata
+DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/nyu-visionx--Cambrian-10M--extracted/Cambrian7M_withsystemprompt.jsonl # DATA_PATH=PATH TO CAMBRIAN JSON FILE (.jsonl)
+ARRAYS_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/arrays # ARRAYS_DIR=PATH TO STORED NPARRAYS WITH MASKS
+METADATA_DIR=/mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/metadata  # METADATA_DIR=PATH TO STORED METADATA ABOUT MASKS
 CAPTIONING=False ##FLAG FOR PROCESSING
 CAMBRIAN=True ##FLAG FOR PROCESSING
 
@@ -30,10 +30,10 @@ pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 iopath
 
 
 
-SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt
+SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt # SAM2_CHECKPOINT=PATH TO SAM2 CHECKPOINT (.pt)
 DEVICE=cuda
 
-PARTITION_ID=0
+PARTITION_ID=2
 TOTAL_PARTITIONS=10
 
 MODEL_CFG=configs/sam2.1/sam2.1_hiera_l.yaml

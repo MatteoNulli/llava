@@ -51,10 +51,7 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
 
 def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnail=False):
 
-    if type(image) == str:
-        orig_width, orig_height = 224, 224
-    else:
-        orig_width, orig_height = image.size
+    orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
     # calculate the existing image aspect ratio
@@ -257,8 +254,11 @@ class InternVL2(lmms):
                 gen_kwargs.pop(k)
 
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
-            visuals = self.flatten(visuals)
+            visuals = [self.flatten(visuals)[0]]
             if self.modality == "image":
+
+                if type(self.model).__name__ == "Sa2VAChatModel":
+                    image = visuals[0]
                 if visuals:
                     visuals = [load_image(visual).to(torch.bfloat16).cuda() for visual in visuals]
                     pixel_values = torch.cat(visuals, dim=0)
@@ -270,7 +270,24 @@ class InternVL2(lmms):
                     pixel_values = None
                     num_patch_list = None
                 print("contexts", contexts)
-                response, history = self.model.chat(self.tokenizer, pixel_values, contexts, gen_kwargs, num_patches_list=num_patches_list, history=None, return_history=True)
+
+                if type(self.model).__name__ == "Sa2VAChatModel":
+                    # image needs to be a Image.open type
+                    question = contexts
+
+                    input_dict = {
+                        "image": image,
+                        "text": question,
+                        "past_text": "",
+                        "mask_prompts": None,
+                        "tokenizer": self.tokenizer,
+                    }
+
+                    return_dict = self.model.predict_forward(**input_dict)
+                    response = return_dict["prediction"]
+                    history = None
+                else:
+                    response, history = self.model.chat(self.tokenizer, pixel_values, contexts, gen_kwargs, num_patches_list=num_patches_list, history=None, return_history=True)
                 print("response", response)
             elif self.modality == "video":
                 assert len(visuals) == 1, f"Only one video is supported, but got {len(visuals)} videos."

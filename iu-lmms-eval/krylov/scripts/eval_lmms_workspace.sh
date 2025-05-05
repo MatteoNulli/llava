@@ -18,7 +18,7 @@ cd iu-lmms-eval/
 
 # TASK=realworldqa,textvqa_test,ai2d,mme,mmstar,mmbench_en_dev
 # TASK=mme,mmstar
-TASK=mmvp
+TASK=aro-visual-relation
 
 # if [[ "$TASK" =~ mmbench ]]; then
 #     pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 openpyxl
@@ -56,9 +56,9 @@ MODEL_ARGS=pretrained=$CKPT_PATH,model_base=$MODEL_BASE,conv_template=$CONV_MODE
 # MODEL_NAME=cambrian
 # MODEL_ARGS=pretrained=$CKPT_PATH
 
-CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
-MODEL_NAME=internvl2
-MODEL_ARGS=pretrained=$CKPT_PATH
+# CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
+# MODEL_NAME=internvl2
+# MODEL_ARGS=pretrained=$CKPT_PATH
 
 
 # CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--llava-hf--llava-1.5-7b-hf/snapshots/6ceb2ed33cb8f107a781c431fe2e61574da69369

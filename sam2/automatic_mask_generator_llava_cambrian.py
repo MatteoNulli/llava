@@ -119,7 +119,7 @@ def distributed_sam2_inference(args):
     futures = []
     for item in tqdm(
         partition_data,
-        desc=f"Processing partition {args.partition_id} of length {len(data)}",
+        desc=f"Processing partition {args.partition_id} of length {len(partition_data)}",
     ):
 
         image_key = data_manager._compute_image_key(item)  # your existing logic

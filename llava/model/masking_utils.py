@@ -534,40 +534,49 @@ class MaskEmbedder(torch.nn.Module):
             resized_image_masks = [
                 m.to(image_features.device).contiguous() for m in resized_image_masks
             ]
+            try:
+                if self.mask_removing and len(resized_image_masks) > self.mask_limit:
+                    masked_features = []
+                elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
+                    masked_features = [
+                        image_features[mask]
+                        for mask in resized_image_masks[: self.mask_limit]
+                    ]
+                elif self.image_filling:
+                    for m in resized_image_masks:
+                        assert m.dtype == torch.bool
+                        assert (
+                            m.shape[0] == image_features.shape[0]
+                        ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
 
-            if self.mask_removing and len(resized_image_masks) > self.mask_limit:
-                masked_features = []
-            elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
-                masked_features = [
-                    image_features[mask]
-                    for mask in resized_image_masks[: self.mask_limit]
-                ]
-            elif self.image_filling:
+                    covered = (
+                        torch.stack(resized_image_masks, dim=0)
+                        .any(dim=0)
+                        .to(image_features.device)
+                    )
 
-                for m in resized_image_masks:
-                    assert m.dtype == torch.bool
-                    assert (
-                        m.shape[0] == image_features.shape[0]
-                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+                    # 2) invert to get the “uncovered” positions
+                    uncovered = ~covered
+                    uncovered = uncovered.to(image_features.device)
 
-                covered = (
-                    torch.stack(resized_image_masks, dim=0)
-                    .any(dim=0)
-                    .to(image_features.device)
+                    # 3) if there really is anything uncovered, append it
+                    if torch.count_nonzero(uncovered).item() > 0:
+                        resized_image_masks.append(uncovered)
+
+                    # 4) now apply all masks (including the dummy one) to extract features
+                    masked_features = [
+                        image_features[mask] for mask in resized_image_masks
+                    ]
+
+                else:
+                    masked_features = [
+                        image_features[mask] for mask in resized_image_masks
+                    ]
+            except:
+                print(
+                    f"Raised Exception within masking application process, using only image_features for image number {i}"
                 )
-
-                # 2) invert to get the “uncovered” positions
-                uncovered = ~covered
-                uncovered = uncovered.to(image_features.device)
-
-                # 3) if there really is anything uncovered, append it
-                if uncovered.any():
-                    resized_image_masks.append(uncovered)
-
-                # 4) now apply all masks (including the dummy one) to extract features
-                masked_features = [image_features[mask] for mask in resized_image_masks]
-            else:
-                masked_features = [image_features[mask] for mask in resized_image_masks]
+                masked_features = image_features
 
             if self.averaging:
                 masked_features = [

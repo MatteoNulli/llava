@@ -56,8 +56,12 @@ TASK=mmvp
 # MODEL_ARGS=pretrained=$CKPT_PATH
 
 
-CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--llava-hf--llama3-llava-next-8b-hf/snapshots/b041c0d0ea0dd0196d147206c210c8d1752fc2da
-MODEL_NAME=llava_hf
+# CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--llava-hf--llama3-llava-next-8b-hf/snapshots/b041c0d0ea0dd0196d147206c210c8d1752fc2da
+# MODEL_NAME=llava_hf
+# MODEL_ARGS=pretrained=$CKPT_PATH
+
+CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--ByteDance--Sa2VA-8B/snapshots/43ee408e24e7fc571a4e33862f663c2dbc6e11da
+MODEL_NAME=internvl2
 MODEL_ARGS=pretrained=$CKPT_PATH
 
 echo $TASK

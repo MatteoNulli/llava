@@ -366,6 +366,9 @@ class Llava(lmms):
             elif task == "mmvp":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmvp/arrays"
                 self.model.sam2_masking_token = False
+            elif task == "aro-visual-relation":
+                base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro-visual-relation/arrays"
+                self.model.sam2_masking_token = True
             elif task == "mme":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mme/arrays"
                 self.model.sam2_masking_token = True
