@@ -446,24 +446,24 @@ class PartitionedSegmentationManager:
                 elif "gowitheflow___aro-coco-order" in row["benchmark"]:
                     image_key = f"gowitheflow___aro-coco-order_picture_{i}"
                     image = Image.open(
-                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                        io.BytesIO(ast.literal_eval(row["images"])["bytes"])
                     ).convert("RGB")
                 elif "gowitheflow___aro-flickr-order" in row["benchmark"]:
                     image_key = f"gowitheflow___aro-flickr-order_picture_{i}"
                     image = Image.open(
-                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                        io.BytesIO(ast.literal_eval(row["images"])["bytes"])
                     ).convert("RGB")
 
                 elif "gowitheflow___aro-visual-relation" in row["benchmark"]:
                     image_key = f"gowitheflow___aro-visual-relation_picture_{i}"
                     image = Image.open(
-                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                        io.BytesIO(ast.literal_eval(row["images"])["bytes"])
                     ).convert("RGB")
 
                 elif "gowitheflow___aro-visual-attribution" in row["benchmark"]:
                     image_key = f"gowitheflow___aro-visual-attribution_picture__{i}"
                     image = Image.open(
-                        io.BytesIO(ast.literal_eval(row["images"]["bytes"]))
+                        io.BytesIO(ast.literal_eval(row["images"])["bytes"])
                     ).convert("RGB")
 
                 image = np.array(image.convert("RGB"))

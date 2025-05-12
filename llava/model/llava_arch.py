@@ -26,7 +26,11 @@ from .multimodal_projector.builder import (
     build_subobject_vision_projector,
 )
 from .subobject_tokenization_utils import VisualTokenEmbedding
-from .masking_utils import MaskEmbedder, BatchedMaskEmbedder
+from .masking_utils import (
+    MaskEmbedder,
+    BatchedMaskEmbedder,
+    downsample_mask_to_1d_counts,
+)
 
 from llava.constants import (
     IGNORE_INDEX,
@@ -213,6 +217,254 @@ class LlavaMetaForCausalLM(ABC):
     def get_vision_tower(self):
         return self.get_model().get_vision_tower()
 
+    def apply_masks_with_tokens(self, images_batch, masks_batch):
+        """
+        Applies masks to the image features and appends special tokens signaling the masked feature start/end.
+
+        Parameters:
+            images_batch (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
+            masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
+                                        the inner Tensors are of size (n. of masks, (image_h, image_w)).
+
+        Returns:
+            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+        """
+
+        batch_size = images_batch.shape[0]
+        # print("images_batch", images_batch)
+
+        batched_features = []
+        zero_indices = []
+        for i, (image_features, image_masks) in enumerate(
+            zip(images_batch, masks_batch)
+        ):
+
+            # Get image features shape (batch_size, ve_dim, feature_dim)
+            ve_dim, feature_dim = image_features.shape
+
+            if self.use_sliding_window:
+                resized_image_masks = create_sliding_masks(
+                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
+                )
+            elif self.use_dummy_masks:
+                resized_image_masks = create_deterministic_dummy_masks(
+                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
+                )
+            else:
+                resized_image_masks = [
+                    downsample_mask_to_1d_counts(
+                        mask, ve_dim, device=image_features.device
+                    )
+                    for mask in image_masks
+                ]
+
+            if self.mask_removing and len(resized_image_masks) > self.mask_limit:
+                masked_features = []
+            elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
+                resized_image_masks = list(resized_image_masks)
+                masked_features = [
+                    image_features[mask]
+                    for mask in resized_image_masks[: self.mask_limit]
+                ]
+            elif self.image_filling:
+                image_features = image_features.to(device)
+                resized_image_masks_new = list(resized_image_masks)
+                for m in resized_image_masks_new:
+                    assert (
+                        m.device == image_features.device
+                    ), f"mask device {m.device} doesn't match features {image_features.device}"
+                    assert (
+                        m.dtype == torch.bool
+                    ), f"mask dtype {m.dtype} doesn't match features {torch.bool}"
+                    assert (
+                        m.shape[0] == image_features.shape[0]
+                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+
+                covered = (
+                    torch.stack(resized_image_masks_new, dim=0)
+                    .any(dim=0)
+                    .to(image_features.device)
+                )
+
+                # 2) invert to get the “uncovered” positions
+                uncovered = ~covered
+                uncovered = uncovered.to(image_features.device)
+
+                # 3) if there really is anything uncovered, append it
+                if uncovered.any().item() > 0:
+                    resized_image_masks_new.append(uncovered)
+
+                # 4) now apply all masks (including the dummy one) to extract features
+                masked_features = [
+                    image_features[mask] for mask in resized_image_masks_new
+                ]
+            else:
+                masked_features = [image_features[mask] for mask in resized_image_masks]
+
+            if self.averaging:
+                masked_features = [
+                    torch.mean(mask_feat, dim=0).reshape(1, feature_dim)
+                    for mask_feat in masked_features
+                ]  # averaging across 576 --> (bs, feature_dim)
+            ##appending whole image feature at the beginning of the masks features
+            if (
+                self.global_view
+                and not self.averaging_global_view
+                and not self.no_masktoken
+            ):
+                if hasattr(self.get_model(), "mm_bom_mask_token"):  # during training
+                    masked_with_tokens = torch.cat(
+                        [image_features]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+                else:  # during inference
+                    masked_with_tokens = torch.cat(
+                        [image_features]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+            elif (
+                self.global_view
+                and self.averaging_global_view
+                and not self.no_masktoken
+            ):
+                if hasattr(self.get_model(), "mm_bom_mask_token"):  # during training
+                    masked_with_tokens = torch.cat(
+                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+
+                else:  # during inference
+                    masked_with_tokens = torch.cat(
+                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                        + [
+                            item
+                            for mask_feat in masked_features
+                            for item in [
+                                self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ]
+                        ],
+                        dim=0,
+                    )
+
+            elif (
+                self.global_view
+                and not self.averaging_global_view
+                and self.no_masktoken
+            ):
+                masked_with_tokens = torch.cat(
+                    [image_features] + [mask_feat for mask_feat in masked_features],
+                    dim=0,
+                )
+            elif (
+                not self.global_view
+                and not self.averaging_global_view
+                and self.no_masktoken
+            ):
+                masked_with_tokens = torch.cat(
+                    [mask_feat for mask_feat in masked_features], dim=0
+                )
+            elif self.global_view and self.averaging_global_view and self.no_masktoken:
+                masked_with_tokens = torch.cat(
+                    [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                    + [mask_feat for mask_feat in masked_features],
+                    dim=0,
+                )
+
+            else:
+                if hasattr(self.get_model(), "mm_bom_mask_token"):
+                    masked_with_tokens = torch.cat(
+                        [
+                            torch.cat(
+                                [
+                                    self.get_model().mm_bom_mask_token.mm_bom_mask_token.to(
+                                        image_features.device
+                                    ),
+                                    mask_feat,
+                                ],
+                                dim=0,
+                            )
+                            for mask_feat in masked_features
+                        ],
+                        dim=0,
+                    )
+                else:
+                    masked_with_tokens = torch.cat(
+                        [
+                            torch.cat(
+                                [
+                                    self.mm_bom_mask_token.mm_bom_mask_token.to(
+                                        image_features.device
+                                    ),
+                                    mask_feat,
+                                ],
+                                dim=0,
+                            )
+                            for mask_feat in masked_features
+                        ],
+                        dim=0,
+                    )
+            # Shape (bs, (1 + n) * 576 + 2n, 1024)
+            batched_features.append(masked_with_tokens.to(image_features.device))
+
+        padding = True
+        if padding:
+            # Find max dimension size
+            max_dim_size = max(features.shape[0] for features in batched_features)
+
+            # # Pad each tensor to match max_dim_size
+            padded_features = []
+            for features in batched_features:
+                pad_size = max_dim_size - features.shape[0]
+                padded = torch.cat(
+                    [
+                        features,
+                        torch.zeros(
+                            (pad_size, features.shape[1]), device=image_features.device
+                        ),
+                    ],
+                    dim=0,
+                )
+                padded_features.append(padded)
+
+            batched_features = padded_features
+
+        final_output = torch.stack(batched_features).to(images_batch.device)
+
+        return final_output, zero_indices
+
     def encode_images(self, images, masks, masking=False):
         """
         Encodes images in the vision encoder and then in the multimodal projector
@@ -224,18 +476,18 @@ class LlavaMetaForCausalLM(ABC):
         Returns:
             torch.Tensor: Image features outputted from multimodal projector.
         """
-        ## B.O. MASKING PART
-        global_view = False
-        averaging = False
-        mask_removing = False
-        mask_limiting = False
-        mask_limit = 20
-        averaging_global_view = False
-        no_masktoken = False
-        use_sliding_window = False
-        number_of_masks = 5
-        use_dummy_masks = False
-        image_filling = True
+
+        self.global_view = False
+        self.averaging = False
+        self.mask_removing = False
+        self.mask_limiting = False
+        self.mask_limit = 20
+        self.averaging_global_view = False
+        self.no_masktoken = False
+        self.use_sliding_window = False
+        self.number_of_masks = 5
+        self.use_dummy_masks = False
+        self.image_filling = False
 
         if (
             masking
@@ -289,31 +541,14 @@ class LlavaMetaForCausalLM(ABC):
             and masks is not None
             and any(torch.any(mask != 0).item() for mask in masks)
         ):
-            # image features are extracted inside MaskEmbedder.
-            mask_embedder = MaskEmbedder(
-                model=self,  ## LlavaLlamaForCausalLM (contains bom_mask_token at inference time)
-                get_model=self.get_model(),  ## LlavaLlamaModel (submodel of LlavaLlamaForCausalLM) (contains bom_mask_token at train time) ## to fix this.
-                config=self.config,
-                vision_tower=self.get_model().get_vision_tower(),
-                global_view=global_view,
-                averaging=averaging,
-                mask_removing=mask_removing,
-                mask_limiting=mask_limiting,
-                mask_limit=mask_limit,
-                averaging_global_view=averaging_global_view,
-                no_masktoken=no_masktoken,
-                use_sliding_window=use_sliding_window,
-                use_dummy_masks=use_dummy_masks,
-                number_of_masks=number_of_masks,
-                image_filling=image_filling,
-            )
+            image_features = self.get_model().get_vision_tower()(images)
 
-            image_features, _ = mask_embedder(images, masks)
+            ## B.O. MASKING PART
+            image_features, _ = self.apply_masks_with_tokens(image_features, masks)
             image_features = image_features.to(images.dtype).to(images.device)
-            ## E.O. MASKING PART
+            # ## E.O. MASKING PART
 
             image_features = self.get_model().mm_projector(image_features)
-
             return image_features
 
         elif masking and self.config.mm_projector_type == "subobject_tokenization":

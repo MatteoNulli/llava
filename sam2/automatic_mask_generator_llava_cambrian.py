@@ -30,7 +30,6 @@ class SAM2MaskActor:
             pred_iou_thresh=0.9,
         )
 
-        # self.input_root = "/mnt/nushare2/data/mnulli/thesis/data/training_data/nyu-visionx--Cambrian-10M--extracted"
         self.arrays_dir = arrays_dir
         self.partiton_id = partition_id
         self.data_manager = data_manager
@@ -116,6 +115,8 @@ def distributed_sam2_inference(args):
     # Distribute tasks
     start = time.time()
 
+    input_root = "/mnt/nushare2/data/mnulli/thesis/data/training_data/nyu-visionx--Cambrian-10M--extracted"
+
     futures = []
     for item in tqdm(
         partition_data,
@@ -129,6 +130,10 @@ def distributed_sam2_inference(args):
             continue
 
         image_path = item["image"]
+        image_path_check = image_path.split("extracted")[-1]
+        if "nan" in image_path_check:
+            continue
+
         actor = next(actor_pool)
         futures.append(actor.generate_mask.remote(image_path, image_key, metadata))
 

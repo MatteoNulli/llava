@@ -6,6 +6,9 @@ from torch import nn
 import torchvision.ops as ops
 
 
+from dataclasses import dataclass, field
+
+
 # Helper function: pad a tensor to the target shape
 def adjust_tensor_size(tensor, target_channels, target_height, target_width):
     c, h, w = tensor.shape
@@ -50,7 +53,7 @@ def adjust_tensor_size(tensor, target_channels, target_height, target_width):
 
 
 def downsample_mask_to_1d_counts(
-    mask: torch.Tensor, output_size: int, threshold_count: float = 0.5
+    mask: torch.Tensor, output_size: int, threshold_count: float = 0.5, device: torch.device = 'cuda'
 ) -> torch.Tensor:
     """
     Downsamples a 1D or 2D boolean mask to a 1D boolean tensor of length 'output_size'
@@ -96,6 +99,7 @@ def downsample_mask_to_1d_counts(
 
     # Binarize: mark a bin as True if the estimated count is at least threshold_count.
     downsampled_mask = counts >= threshold_count
+    downsampled_mask=downsampled_mask.to(device)
     return downsampled_mask
 
 
@@ -273,7 +277,7 @@ class BatchedMaskEmbedder(torch.nn.Module):
         else:
             resized_image_masks = torch.stack(
                 [
-                    downsample_mask_to_1d_counts(mask, ve_dim).to(
+                    downsample_mask_to_1d_counts(mask, ve_dim, device=images_features.device).to(
                         images_features.device
                     )
                     for image_masks in masks_batch
@@ -530,53 +534,56 @@ class MaskEmbedder(torch.nn.Module):
             # print("resized_image_masks[0]", resized_image_masks[1])
             # print("resized_image_masks[0]", resized_image_masks[2])
 
-            image_features = image_features.to(image_features.device)
-            resized_image_masks = [
-                m.to(image_features.device).contiguous() for m in resized_image_masks
-            ]
-            try:
-                if self.mask_removing and len(resized_image_masks) > self.mask_limit:
-                    masked_features = []
-                elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
-                    masked_features = [
-                        image_features[mask]
-                        for mask in resized_image_masks[: self.mask_limit]
-                    ]
-                elif self.image_filling:
-                    for m in resized_image_masks:
-                        assert m.dtype == torch.bool
-                        assert (
-                            m.shape[0] == image_features.shape[0]
-                        ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+            # image_features = image_features.to(image_features.device)
+            # resized_image_masks = [
+            #     m.to(image_features.device) for m in resized_image_masks
+            # ]
+            image_features = image_features.contiguous()
+            resized_image_masks = [m.contiguous() for m in resized_image_masks]
 
-                    covered = (
-                        torch.stack(resized_image_masks, dim=0)
-                        .any(dim=0)
-                        .to(image_features.device)
-                    )
+            if self.mask_removing and len(resized_image_masks) > self.mask_limit:
+                masked_features = []
+            elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
+                resized_image_masks = list(resized_image_masks)
+                masked_features = [
+                    image_features[mask]
+                    for mask in resized_image_masks[: self.mask_limit]
+                ]
+            elif self.image_filling:
+                image_features = image_features.to(device)
+                resized_image_masks_new = list(resized_image_masks)
+                for m in resized_image_masks_new:
+                    assert (
+                        m.device == image_features.device
+                    ), f"mask device {m.device} doesn't match features {image_features.device}"
+                    assert (
+                        m.dtype == torch.bool
+                    ), f"mask dtype {m.dtype} doesn't match features {torch.bool}"
+                    assert (
+                        m.shape[0] == image_features.shape[0]
+                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
 
-                    # 2) invert to get the “uncovered” positions
-                    uncovered = ~covered
-                    uncovered = uncovered.to(image_features.device)
-
-                    # 3) if there really is anything uncovered, append it
-                    if torch.count_nonzero(uncovered).item() > 0:
-                        resized_image_masks.append(uncovered)
-
-                    # 4) now apply all masks (including the dummy one) to extract features
-                    masked_features = [
-                        image_features[mask] for mask in resized_image_masks
-                    ]
-
-                else:
-                    masked_features = [
-                        image_features[mask] for mask in resized_image_masks
-                    ]
-            except:
-                print(
-                    f"Raised Exception within masking application process, using only image_features for image number {i}"
+                covered = (
+                    torch.stack(resized_image_masks_new, dim=0)
+                    .any(dim=0)
+                    .to(image_features.device)
                 )
-                masked_features = image_features
+
+                # 2) invert to get the “uncovered” positions
+                uncovered = ~covered
+                uncovered = uncovered.to(image_features.device)
+
+                # 3) if there really is anything uncovered, append it
+                if uncovered.any().item() > 0:
+                    resized_image_masks_new.append(uncovered)
+
+                # 4) now apply all masks (including the dummy one) to extract features
+                masked_features = [
+                    image_features[mask] for mask in resized_image_masks_new
+                ]
+            # find /mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/arrays/partition_6 -mindepth 2 -type d -iname '*.jpg' -printf '%P\n' | cut -d/ -f1 | sort | uniq -c | awk '{print $2 ": " $1}'
+            else:
+                masked_features = [image_features[mask] for mask in resized_image_masks]
 
             if self.averaging:
                 masked_features = [

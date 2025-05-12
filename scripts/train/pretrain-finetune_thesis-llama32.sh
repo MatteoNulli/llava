@@ -22,6 +22,7 @@ export NCCL_DEBUG=INFO
 export TORCH_NCCL_ENABLE_MONITORING=0
 export HF_DATASETS_OFFLINE=1
 
+
 RANK=${RANK:-0}
 ADDR=${ADDR:-"127.0.0.1"}
 PORT=${PORT:-"29501"}
@@ -62,7 +63,7 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="8bs_no-global-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_RUN_NAME="noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
 BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
@@ -131,7 +132,7 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
-SFT_RUN_NAME="8bs_no-global-view-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$SFT_EPOCHS-EPOCHS"
+SFT_RUN_NAME="noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$SFT_EPOCHS-EPOCHS"
 
 PROJECTOR=${BASE_SAVE_DIR}/mm_projector.bin
 MASK_TOKEN=${BASE_SAVE_DIR}/mm_bom_mask_token.bin
@@ -142,6 +143,7 @@ SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/sft/${SFT_RUN_NAME}
 
 mkdir -p $SAVE_DIR
 
+CUDA_LAUNCH_BLOCKING=1
 ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
     llava/train/train_mem.py \
     --deepspeed scripts/zero3.json \

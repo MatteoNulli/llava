@@ -1384,12 +1384,12 @@ class LazySupervisedDataset(Dataset):
         #     )
 
         # elif not ("ocr" in image_ids or "textvqa" in image_ids) and
-        
+
         if len(masks) > 0:
             data_dict["masks"] = torch.stack(masks).to(image[0][0].device)
         else:
             # print(f"Failed to read mask files for image {image_id}, and image_file {image_file}")
-            data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)]).to(
+            data_dict["masks"] = torch.stack([torch.zeros(3, 3).to(image[0][0].device), torch.zeros(3, 3).to(image[0][0].device)]).to(
                 image[0][0].device
             )
 
