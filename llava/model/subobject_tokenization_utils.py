@@ -319,7 +319,7 @@ class VisualTokenEmbedding(torch.nn.Module):
                 self.get_model.mm_projector(visual_token_embeds) * not_padding
             )
  
-        return (
+        return ( 
             visual_token_embeds,
             features,
             not_padding.squeeze(-1).sum(dim=-1).cpu().numpy(),

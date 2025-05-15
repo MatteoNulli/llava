@@ -13,10 +13,11 @@
 #    limitations under the License.
 
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Callable, Optional, Tuple, Union, Sequence
 
 import torch
 import torch.nn as nn
+
 
 from transformers import (
     AutoConfig,
@@ -26,10 +27,93 @@ from transformers import (
     LlamaForCausalLM,
 )
 
+from transformers.modeling_rope_utils import (
+    ROPE_INIT_FUNCTIONS,
+)
+from transformers.cache_utils import Cache
+from transformers.processing_utils import Unpack
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
+
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM, BOMMaskToken
+
+
+class MyLlamaRotaryEmbedding(nn.Module):
+    def __init__(self, config: LlamaConfig, device=None):
+        super().__init__()
+        # BC: "rope_type" was originally "type"
+        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
+            self.rope_type = config.rope_scaling.get(
+                "rope_type", config.rope_scaling.get("type")
+            )
+        else:
+            self.rope_type = "default"
+
+        self.max_seq_len_cached = config.max_position_embeddings
+        self.original_max_seq_len = config.max_position_embeddings
+
+        self.config = config
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+
+        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.original_inv_freq = self.inv_freq
+
+        # group_ranges: list of length batch; each element is a list of
+        #               (start, end) tuples indicating intervals within
+        #               which all tokens should share the same pos‐id.
+        #               If None, falls back to original per‐token positions.
+        self.group_ranges: Optional[List[List[Tuple[int, int]]]] = None
+
+    @torch.no_grad()
+    def forward(
+        self,
+        x: torch.Tensor,
+        position_ids: torch.LongTensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        x:            [batch, seq_len, dim]  (only used for device/dtype)
+        position_ids: [1, seq_len]       absolute token positions
+        """
+        batch_size, seq_len, _ = x.shape
+
+        # 1) Expand the shared position_ids to full batch
+        updated_pos_ids = position_ids
+        if updated_pos_ids.shape[0] == 1 and batch_size > 1:
+            # expand then clone so we can mutate
+            updated_pos_ids = updated_pos_ids.expand(batch_size, seq_len).clone()
+        else:
+            updated_pos_ids = updated_pos_ids.clone()
+
+        # 2) If grouping requested, mask-and-replace so that
+        #    all tokens in [st,ed] get the same rep ID = st
+        if self.group_ranges is not None:
+            for i, ranges in enumerate(self.group_ranges):
+                for st, ed in ranges:
+                    mask = (updated_pos_ids[i] >= st) & (updated_pos_ids[i] <= ed)
+                    updated_pos_ids[i, mask] = st
+
+        # 3) Now `updated_pos_ids` is [batch, seq_len] with your grouped IDs
+        inv_freq_expanded = (
+            self.inv_freq[None, :, None].float().expand(batch_size, -1, 1).to(x.device)
+        )
+        updated_pos_ids_expanded = updated_pos_ids[:, None, :].float()
+
+        device_type = (
+            x.device.type
+            if isinstance(x.device.type, str) and x.device.type != "mps"
+            else "cpu"
+        )
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expanded @ updated_pos_ids_expanded).transpose(1, 2)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos() * self.attention_scaling
+            sin = emb.sin() * self.attention_scaling
+
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
 class LlavaConfig(LlamaConfig):
@@ -49,10 +133,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     def __init__(self, config):
         super(LlamaForCausalLM, self).__init__(config)
         self.model = LlavaLlamaModel(config)
+        self.config = config
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.sam2_masking_token = False
+        # self.sam2_masking_token = False
         # projector_input_features = self.model.
         if hasattr(self.model, "mm_projector"):
             projector_input_features = self.model.mm_projector[0].in_features
@@ -89,7 +174,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         # print('before requires_grad: ', input_ids.requires_grad)  # Output: False
         # input_ids.requires_grad = True
         # print('after requires_grad: ', input_ids.requires_grad)  # Output: True
-
+        if self.model.custom_rotary_embedding:
+            self.model.rotary_emb = MyLlamaRotaryEmbedding(self.config)
         if inputs_embeds is None:
             (
                 input_ids,

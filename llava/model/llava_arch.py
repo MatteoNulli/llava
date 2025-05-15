@@ -13,12 +13,15 @@
 #    limitations under the License.
 
 
-from abc import ABC, abstractmethod
-
+import itertools
 import torch
 import torch.nn as nn
 import numpy as np
+
+from abc import ABC, abstractmethod
 from torch.nn.utils.rnn import pad_sequence
+from typing import List, Callable, Optional, Tuple, Union, Sequence
+
 
 from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_projector.builder import (
@@ -30,6 +33,7 @@ from .masking_utils import (
     MaskEmbedder,
     BatchedMaskEmbedder,
     downsample_mask_to_1d_counts,
+    check_resised_image_masks,
 )
 
 from llava.constants import (
@@ -87,6 +91,7 @@ class LlavaMetaModel:
         mm_patch_merge_type = model_args.mm_patch_merge_type
 
         self.sam2_masking_token = model_args.sam2_masking_token
+        self.custom_rotary_embedding = model_args.custom_rotary_embedding
 
         self.config.mm_vision_tower = vision_tower
 
@@ -217,6 +222,50 @@ class LlavaMetaForCausalLM(ABC):
     def get_vision_tower(self):
         return self.get_model().get_vision_tower()
 
+    def compute_batch_ranges(
+        self,
+        masked_features: List[torch.Tensor],
+        image_features: torch.Tensor,
+        mm_bom_mask_token: torch.Tensor,
+    ) -> List[Tuple[int, int]]:
+        """
+        Reconstruct the same grouping you used in your .cat(...) logic,
+        then compute start/end offsets along dim=0.
+
+        Returns e.g. [(0,100), (100,200), …].
+        """
+
+        groups = []
+
+        # 1) the “global view” chunk (if any)
+        if self.global_view and not self.no_masktoken:
+            if not self.averaging_global_view:
+                # whole image_features as one chunk
+                groups.append([image_features])
+            else:
+                # mean-pooled image_features as one chunk
+                avg = image_features.mean(dim=0, keepdim=True)  # shape (1, D)
+                groups.append([avg])
+
+        # 2) each mask → possibly prefixed by its mask_token
+        for feat in masked_features:
+            if not self.no_masktoken:
+                # [token, feat] is one chunk
+                token = mm_bom_mask_token.to(feat.device).unsqueeze(
+                    0
+                )  # ensure shape (1,D)
+                groups.append([token, feat])
+            else:
+                # just the feat
+                groups.append([feat])
+
+        # 3) now sum up lengths per chunk
+        lengths = [sum(t.size(0) for t in chunk) for chunk in groups]
+        ends = list(itertools.accumulate(lengths))
+        starts = [0] + ends[:-1]
+
+        return list(zip(starts, ends))
+
     def apply_masks_with_tokens(self, images_batch, masks_batch):
         """
         Applies masks to the image features and appends special tokens signaling the masked feature start/end.
@@ -234,7 +283,7 @@ class LlavaMetaForCausalLM(ABC):
         # print("images_batch", images_batch)
 
         batched_features = []
-        zero_indices = []
+        batch_ranges = []
         for i, (image_features, image_masks) in enumerate(
             zip(images_batch, masks_batch)
         ):
@@ -242,21 +291,26 @@ class LlavaMetaForCausalLM(ABC):
             # Get image features shape (batch_size, ve_dim, feature_dim)
             ve_dim, feature_dim = image_features.shape
 
+            ## for indexing masks operation pass them to cpu
+            passing_device = "cpu"
+            image_masks = image_masks.to(passing_device)
             if self.use_sliding_window:
                 resized_image_masks = create_sliding_masks(
-                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
+                    ve_dim, device=passing_device, num_masks=self.number_of_masks
                 )
             elif self.use_dummy_masks:
                 resized_image_masks = create_deterministic_dummy_masks(
-                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
+                    ve_dim, device=passing_device, num_masks=self.number_of_masks
                 )
             else:
                 resized_image_masks = [
-                    downsample_mask_to_1d_counts(
-                        mask, ve_dim, device=image_features.device
-                    )
+                    downsample_mask_to_1d_counts(mask, ve_dim, device=passing_device)
                     for mask in image_masks
                 ]
+            ##checking that all resized masks are valid
+            resized_image_masks = check_resised_image_masks(
+                resized_image_masks, device=image_features.device
+            )
 
             if self.mask_removing and len(resized_image_masks) > self.mask_limit:
                 masked_features = []
@@ -267,7 +321,7 @@ class LlavaMetaForCausalLM(ABC):
                     for mask in resized_image_masks[: self.mask_limit]
                 ]
             elif self.image_filling:
-                image_features = image_features.to(device)
+                image_features = image_features.to(image_features.device)
                 resized_image_masks_new = list(resized_image_masks)
                 for m in resized_image_masks_new:
                     assert (
@@ -299,6 +353,22 @@ class LlavaMetaForCausalLM(ABC):
                     image_features[mask] for mask in resized_image_masks_new
                 ]
             else:
+                for m in resized_image_masks:
+                    assert (
+                        m.device == image_features.device
+                    ), f"mask device {m.device} doesn't match features {image_features.device}"
+                    assert (
+                        m.dtype == torch.bool
+                    ), f"mask dtype {m.dtype} doesn't match features {torch.bool}"
+                    assert (
+                        m.shape[0] == image_features.shape[0]
+                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+                    ## checking
+
+                assert all(
+                    t.any().item() for t in resized_image_masks
+                ), f"Found invalid tensors at indices: {[i for i, t in enumerate(resized_image_masks) if not t.any().item()]}"
+
                 masked_features = [image_features[mask] for mask in resized_image_masks]
 
             if self.averaging:
@@ -436,6 +506,20 @@ class LlavaMetaForCausalLM(ABC):
                         ],
                         dim=0,
                     )
+
+            if self.model.custom_rotary_embedding:
+                batch_ranges_single_image = self.compute_batch_ranges(
+                    masked_features=masked_features,
+                    image_features=image_features,
+                    mm_bom_mask_token=(
+                        self.get_model().mm_bom_mask_token
+                        if hasattr(self.get_model(), "mm_bom_mask_token")
+                        else self.mm_bom_mask_token
+                    ).mm_bom_mask_token,
+                )
+                batch_ranges.append(batch_ranges_single_image)
+            else:
+                batch_ranges = []
             # Shape (bs, (1 + n) * 576 + 2n, 1024)
             batched_features.append(masked_with_tokens.to(image_features.device))
 
@@ -463,7 +547,7 @@ class LlavaMetaForCausalLM(ABC):
 
         final_output = torch.stack(batched_features).to(images_batch.device)
 
-        return final_output, zero_indices
+        return final_output, batch_ranges
 
     def encode_images(self, images, masks, masking=False):
         """
@@ -544,11 +628,17 @@ class LlavaMetaForCausalLM(ABC):
             image_features = self.get_model().get_vision_tower()(images)
 
             ## B.O. MASKING PART
-            image_features, _ = self.apply_masks_with_tokens(image_features, masks)
+            image_features = image_features.to(images.dtype).to(images.device)
+            image_features, group_ranges = self.apply_masks_with_tokens(
+                image_features, masks
+            )
+            if self.model.custom_rotary_embedding:
+                self.model.rotary_emb.group_ranges = group_ranges  # Expected [[(0, 100), (100, 200), (200, 300), (300, 400), (400, 576)], [(0, 200), (200, 600)], ... ] of length batch_size.
             image_features = image_features.to(images.dtype).to(images.device)
             # ## E.O. MASKING PART
 
             image_features = self.get_model().mm_projector(image_features)
+            # print("image_features.shape", image_features.shape)
             return image_features
 
         elif masking and self.config.mm_projector_type == "subobject_tokenization":

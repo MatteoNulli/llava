@@ -25,7 +25,7 @@ import yaml
 import math
 import numpy as np
 
-import pycocotools.mask as maskUtils
+# import pycocotools.mask as maskUtils
 from typing import Dict, Optional, Sequence, List
 
 import torch
@@ -88,6 +88,7 @@ class ModelArguments:
     vision_tower_base: Optional[str] = field(default=None)
 
     sam2_masking_token: Optional[bool] = field(default=False)
+    custom_rotary_embedding: Optional[bool] = field(default=False)
 
 
 @dataclass
@@ -1052,6 +1053,7 @@ class LazySupervisedDataset(Dataset):
         data_path: str,
         tokenizer: transformers.PreTrainedTokenizer,
         data_args: DataArguments,
+        model_args: ModelArguments,
     ):
         super(LazySupervisedDataset, self).__init__()
 
@@ -1060,6 +1062,7 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer = tokenizer
             self.list_data_dict = []
             self.data_args = data_args
+            self.model_args = model_args
 
             with open(data_path, "r") as file:
                 yaml_data = yaml.safe_load(file)
@@ -1127,6 +1130,7 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer = tokenizer
             self.list_data_dict = list_data_dict
             self.data_args = data_args
+            self.model_args = model_args
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -1194,43 +1198,43 @@ class LazySupervisedDataset(Dataset):
 
         return []  # Return empty list if image_id is not found
 
-    def sharegpt4v_get_segmentation_masks(self, folder_path, image_id):
-        """
-        Given a folder path and an image ID, retrieves the corresponding JSON file,
-        extracts segmentation masks, and returns them as a list of NumPy arrays.
+    # def sharegpt4v_get_segmentation_masks(self, folder_path, image_id):
+    #     """
+    #     Given a folder path and an image ID, retrieves the corresponding JSON file,
+    #     extracts segmentation masks, and returns them as a list of NumPy arrays.
 
-        Parameters:
-        folder_path (str): The directory containing the image and JSON files.
-        image_id (str): The identifier of the image (e.g., "sa_364383").
+    #     Parameters:
+    #     folder_path (str): The directory containing the image and JSON files.
+    #     image_id (str): The identifier of the image (e.g., "sa_364383").
 
-        Returns:
-        list: A list of NumPy arrays, each representing a segmentation mask.
-        """
-        # Construct the JSON file path
-        if ".jpg" in image_id:
-            image_id = image_id.replace(".jpg", "")
-        json_file = os.path.join(folder_path, f"{image_id}.json")
+    #     Returns:
+    #     list: A list of NumPy arrays, each representing a segmentation mask.
+    #     """
+    #     # Construct the JSON file path
+    #     if ".jpg" in image_id:
+    #         image_id = image_id.replace(".jpg", "")
+    #     json_file = os.path.join(folder_path, f"{image_id}.json")
 
-        # Load the JSON file
-        with open(json_file, "r") as f:
-            data = json.load(f)
+    #     # Load the JSON file
+    #     with open(json_file, "r") as f:
+    #         data = json.load(f)
 
-        masks = []
-        # Process each annotation in the file
-        for annotation in data.get("annotations", []):
-            segmentation = annotation.get("segmentation")
-            # Check if segmentation is in RLE format (a dict with 'counts')
-            if isinstance(segmentation, dict) and "counts" in segmentation:
-                # Decode the RLE to get a binary mask
-                binary_mask = maskUtils.decode(segmentation)
-                # Sometimes the returned mask has an extra channel dimension; remove it if needed.
-                if binary_mask.ndim == 3 and binary_mask.shape[-1] == 1:
-                    binary_mask = np.squeeze(binary_mask, axis=-1)
-                # Convert the mask to a boolean array (True for mask, False for background)
-                binary_mask = binary_mask.astype(bool)
-                masks.append(binary_mask)
+    #     masks = []
+    #     # Process each annotation in the file
+    #     for annotation in data.get("annotations", []):
+    #         segmentation = annotation.get("segmentation")
+    #         # Check if segmentation is in RLE format (a dict with 'counts')
+    #         if isinstance(segmentation, dict) and "counts" in segmentation:
+    #             # Decode the RLE to get a binary mask
+    #             binary_mask = maskUtils.decode(segmentation)
+    #             # Sometimes the returned mask has an extra channel dimension; remove it if needed.
+    #             if binary_mask.ndim == 3 and binary_mask.shape[-1] == 1:
+    #                 binary_mask = np.squeeze(binary_mask, axis=-1)
+    #             # Convert the mask to a boolean array (True for mask, False for background)
+    #             binary_mask = binary_mask.astype(bool)
+    #             masks.append(binary_mask)
 
-        return masks
+    #     return masks
 
     def create_masks(self, images):
         pass
@@ -1244,7 +1248,7 @@ class LazySupervisedDataset(Dataset):
             image_file = self.list_data_dict[i]["image"]
             image_folder = self.data_args.image_folder
 
-            if image_folder == "None":
+            if image_folder == "None" and self.model_args.sam2_masking_token:
 
                 image_ids = []
                 if "LLaVA-Pretrain" in image_file:
@@ -1260,7 +1264,7 @@ class LazySupervisedDataset(Dataset):
                 image_ids.append(image_id)
 
                 image = Image.open(image_file).convert("RGB")
-            else:
+            elif self.model_args.sam2_masking_token:
                 image = Image.open(os.path.join(image_folder, image_file)).convert(
                     "RGB"
                 )
@@ -1276,6 +1280,13 @@ class LazySupervisedDataset(Dataset):
                         "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images/"
                     )[1]
                 image_ids.append(image_id)
+            else:
+                if image_folder == "None":
+                    image = Image.open(image_file).convert("RGB")
+                else:
+                    image = Image.open(os.path.join(image_folder, image_file)).convert(
+                        "RGB"
+                    )
 
             processor = self.data_args.image_processor
 
@@ -1344,54 +1355,58 @@ class LazySupervisedDataset(Dataset):
             crop_size = self.data_args.image_processor.crop_size
             data_dict["image"] = torch.zeros(3, crop_size["height"], crop_size["width"])
 
-        if len(image_ids) == 0:
-            return data_dict
-        ##Sam2 Masking
-        elif len(image_ids) > 1:
-            ##multiple images support
-            raise NotImplementedError
-        else:
-            image_id = image_ids[0]
-            if "LLaVA-Pretrain" in image_file:
-                # print('pretrain')
-                mask_files = self.find_mask_files(
-                    "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_cap/arrays",
-                    image_id,
-                )
-                masks = self.read_mask_arrays(mask_files)
+        if self.model_args.sam2_masking_token:
+            if len(image_ids) == 0:
+                return data_dict
+            ##Sam2 Masking
+            elif len(image_ids) > 1:
+                ##multiple images support
+                raise NotImplementedError
+            else:
+                image_id = image_ids[0]
+                if "LLaVA-Pretrain" in image_file:
+                    # print('pretrain')
+                    mask_files = self.find_mask_files(
+                        "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_cap/arrays",
+                        image_id,
+                    )
+                    masks = self.read_mask_arrays(mask_files)
 
-            elif "LLaVA-Instruct-665k" in image_file:
-                # print('sft')
-                mask_files = self.find_mask_files(
-                    "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_sft/arrays",
-                    image_id,
-                )
-                masks = self.read_mask_arrays(mask_files)
+                elif "LLaVA-Instruct-665k" in image_file:
+                    # print('sft')
+                    mask_files = self.find_mask_files(
+                        "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_sft/arrays",
+                        image_id,
+                    )
+                    masks = self.read_mask_arrays(mask_files)
 
-            elif "sam_images" in image_file:
-                masks = self.sharegpt4v_get_segmentation_masks(
-                    "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images",
-                    image_id,
-                )
+                # elif "sam_images" in image_file:
+                #     masks = self.sharegpt4v_get_segmentation_masks(
+                #         "/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/sam_images",
+                #         image_id,
+                #     )
 
-            masks = [
-                torch.from_numpy(mask_np).to(image[0][0].device) for mask_np in masks
-            ]
+                masks = [
+                    torch.from_numpy(mask_np).to(image[0][0].device)
+                    for mask_np in masks
+                ]
 
-        #  if "ocr" in image_ids or "textvqa" in image_ids:
-        #     data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)]).to(
-        #         image[0][0].device
-        #     )
+                #  if "ocr" in image_ids or "textvqa" in image_ids:
+                #     data_dict["masks"] = torch.stack([torch.zeros(3, 3), torch.zeros(3, 3)]).to(
+                #         image[0][0].device
+                #     )
 
-        # elif not ("ocr" in image_ids or "textvqa" in image_ids) and
+                # elif not ("ocr" in image_ids or "textvqa" in image_ids) and
 
-        if len(masks) > 0:
-            data_dict["masks"] = torch.stack(masks).to(image[0][0].device)
-        else:
-            # print(f"Failed to read mask files for image {image_id}, and image_file {image_file}")
-            data_dict["masks"] = torch.stack([torch.zeros(3, 3).to(image[0][0].device), torch.zeros(3, 3).to(image[0][0].device)]).to(
-                image[0][0].device
-            )
+            if len(masks) > 0:
+                data_dict["masks"] = torch.stack(masks)
+            else:
+                # print(f"Failed to read mask files for image {image_id}, and image_file {image_file}")
+                data_dict["masks"] = torch.stack(
+                    [
+                        torch.ones(3, 3),
+                    ]
+                ).to(image[0][0].device)
 
         return data_dict
 
@@ -1451,11 +1466,14 @@ class DataCollatorForSupervisedDataset(object):
 
 
 def make_supervised_data_module(
-    tokenizer: transformers.PreTrainedTokenizer, data_args
+    tokenizer: transformers.PreTrainedTokenizer, data_args, model_args
 ) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     train_dataset = LazySupervisedDataset(
-        tokenizer=tokenizer, data_path=data_args.data_path, data_args=data_args
+        tokenizer=tokenizer,
+        data_path=data_args.data_path,
+        data_args=data_args,
+        model_args=model_args,
     )
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(
@@ -1743,7 +1761,9 @@ def train(attn_implementation=None):
         else:
             model.model.mm_bom_mask_token.requires_grad = True
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    data_module = make_supervised_data_module(
+        tokenizer=tokenizer, data_args=data_args, model_args=model_args
+    )
     trainer = LLaVATrainer(
         model=model, tokenizer=tokenizer, args=training_args, **data_module
     )

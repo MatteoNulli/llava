@@ -29,13 +29,13 @@ PORT=${PORT:-"29501"}
 NNODES=${NNODES:-1}
 NUM_GPUS=${NUM_GPUS:-8}
 
-pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 cd /opt/krylov-workflow/src/run_fn_0/
 
 
-pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
-
+# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+# 
 
 # First job
 echo "Starting pretraining job..."
@@ -70,6 +70,7 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
 # mkdir -p $BASE_SAVE_DIR
 
+# CUDA_LAUNCH_BLOCKING=1
 # ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
 #     llava/train/train_mem.py \
 #     --deepspeed scripts/zero3.json \

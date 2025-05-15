@@ -9,6 +9,26 @@ import torchvision.ops as ops
 from dataclasses import dataclass, field
 
 
+def check_resised_image_masks(resized_image_masks, device="cuda"):
+    """
+    Cleaning resized_image_masks.
+    Either by replacing replace the only element with an all-True mask
+    Or removing all tensors which have no True values in them, if we have more than 1 element.
+    """
+    if len(resized_image_masks) == 1:
+        mask = resized_image_masks[0]
+        # if the only mask has no True’s, replace it with an all-True mask
+        if not mask.any().item():
+            resized_image_masks[0] = torch.ones_like(mask)
+    else:
+        # if there’s more than one mask, drop any that are all-False
+        resized_image_masks = [m for m in resized_image_masks if m.any().item()]
+
+    resized_image_masks = [m.to(device) for m in resized_image_masks]
+
+    return resized_image_masks
+
+
 # Helper function: pad a tensor to the target shape
 def adjust_tensor_size(tensor, target_channels, target_height, target_width):
     c, h, w = tensor.shape
@@ -53,7 +73,10 @@ def adjust_tensor_size(tensor, target_channels, target_height, target_width):
 
 
 def downsample_mask_to_1d_counts(
-    mask: torch.Tensor, output_size: int, threshold_count: float = 0.5, device: torch.device = 'cuda'
+    mask: torch.Tensor,
+    output_size: int,
+    threshold_count: float = 0.5,
+    device: torch.device = "cpu",
 ) -> torch.Tensor:
     """
     Downsamples a 1D or 2D boolean mask to a 1D boolean tensor of length 'output_size'
@@ -92,14 +115,12 @@ def downsample_mask_to_1d_counts(
     pooled = torch.nn.functional.adaptive_avg_pool1d(
         mask_flat, output_size
     ).squeeze()  # shape: (output_size,)
-    # print("pooled device", pooled.device, pooled.shape)
 
     # Convert the fraction to an estimated count per bin.
     counts = pooled * bin_size
 
     # Binarize: mark a bin as True if the estimated count is at least threshold_count.
     downsampled_mask = counts >= threshold_count
-    downsampled_mask=downsampled_mask.to(device)
     return downsampled_mask
 
 
@@ -277,9 +298,9 @@ class BatchedMaskEmbedder(torch.nn.Module):
         else:
             resized_image_masks = torch.stack(
                 [
-                    downsample_mask_to_1d_counts(mask, ve_dim, device=images_features.device).to(
-                        images_features.device
-                    )
+                    downsample_mask_to_1d_counts(
+                        mask, ve_dim, device=images_features.device
+                    ).to(images_features.device)
                     for image_masks in masks_batch
                     for mask in image_masks
                 ]

@@ -56,19 +56,25 @@ class SAM2MaskActor:
 
         # final .npy path
         save_path = os.path.join(save_dir, f"{base_name}_masks.npy")
-        np.save(save_path, segmentations)
+        try:
+            np.save(save_path, segmentations)
 
-        # Save metadata
-        # build metadata: keep all fields but point 'segmentation' to the .npy path
-        masks_meta = []
-        for mask in masks:
-            m = mask.copy()
-            m["segmentation"] = save_path
-            masks_meta.append(m)
+            # Save metadata
+            # build metadata: keep all fields but point 'segmentation' to the .npy path
+            masks_meta = []
+            for mask in masks:
+                m = mask.copy()
+                m["segmentation"] = save_path
+                masks_meta.append(m)
 
-        # update and write metadata
-        metadata[image_key] = masks_meta
-        self.data_manager._safe_json_write(metadata, self.data_manager.metadata_file)
+            # update and write metadata
+            metadata[image_key] = masks_meta
+            self.data_manager._safe_json_write(
+                metadata, self.data_manager.metadata_file
+            )
+
+        except:
+            print(f"mask {image_key} not saved at {save_path}. Skipping...")
 
         return save_path
 

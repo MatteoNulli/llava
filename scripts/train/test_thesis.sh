@@ -29,13 +29,13 @@ PORT=${PORT:-"29501"}
 NNODES=${NNODES:-1}
 NUM_GPUS=${NUM_GPUS:-1}
 
-pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 cd /opt/krylov-workflow/src/run_fn_0/
 
 
-pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
-
+# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+# 
 
 # First job
 echo "Starting pretraining job..."
@@ -70,6 +70,7 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
 # mkdir -p $BASE_SAVE_DIR
 
+# CUDA_LAUNCH_BLOCKING=1
 # ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
 #     llava/train/train_mem.py \
 #     --deepspeed scripts/zero3.json \
@@ -105,6 +106,7 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 #     --lazy_preprocess True \
 #     --report_to none \
 #     --sam2_masking_token True \
+#     --custom_rotary_embedding False \
 #     --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
 
 
@@ -120,8 +122,7 @@ SFT_EPOCHS=1
 MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
 MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
-# DATA_PATH_SFT=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/llava_mix665k_format_adjusted.json
-DATA_PATH_SFT=/mnt/nushare2/data/mnulli/thesis/data/training_data/nyu-visionx--Cambrian-10M--extracted/Cambrian7M_withsystemprompt.json
+DATA_PATH_SFT=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/llava_mix665k_format_adjusted.json
 IMG_DIR='None' 
 
 FILE_NAME_SFT=$(echo "${DATA_PATH_SFT##*/}" | cut -d'_' -f1,2)
@@ -185,4 +186,6 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --lazy_preprocess True \
     --report_to none \
     --overwrite_output_dir \
+    --sam2_masking_token True \
+    --custom_rotary_embedding True \
     2>&1 | tee $SAVE_DIR/out
