@@ -5,6 +5,7 @@ import os
 import fire
 import time
 import argparse
+import errno
 
 from PIL import Image
 from itertools import cycle
@@ -52,7 +53,20 @@ class SAM2MaskActor:
             self.arrays_dir, f"partition_{self.partiton_id}"
         )
         save_dir = os.path.join(save_dir_without_key, image_key)
-        os.makedirs(save_dir, exist_ok=True)
+        # try primary directory, fallback to _v2 on ENOSPC
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+        except OSError as e:
+            if e.errno == errno.ENOSPC:
+                save_dir_base_v2 = save_dir_base + "_v2"
+                save_dir_v2 = os.path.join(save_dir_base_v2, image_key)
+                os.makedirs(save_dir_v2, exist_ok=True)
+                save_dir = save_dir_v2
+                print(
+                    f"[WARN] No space on device for {save_dir_base}, using {save_dir_base_v2} instead."
+                )
+            else:
+                raise
 
         # final .npy path
         save_path = os.path.join(save_dir, f"{base_name}_masks.npy")
@@ -163,7 +177,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sam2_checkpoint",
         type=str,
-        default="/data/chatgpt/notebooks/mnulli/sam2/checkpoints/sam2.1_hiera_large.pt",
+        default="/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt",
         help="checkpoint of sam2 model",
     )
     parser.add_argument(

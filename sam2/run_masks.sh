@@ -1,7 +1,7 @@
 python submit.py \
     automatic_masks_cambrian.sh \
     --ems_project thesis-training \
-    --experiment_name automatic_masks_cambrian_p5 \
+    --experiment_name automatic_masks_cambrian_p4 \
     --cluster tess137 \
     -n chatgpt \
     -i hub.tess.io/vorshulevich/vllm:latest \

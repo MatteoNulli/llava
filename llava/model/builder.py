@@ -65,7 +65,6 @@ def load_pretrained_model(
 
     if use_flash_attn:
         kwargs["attn_implementation"] = "flash_attention_2"
-
     if (
         "llava" in model_name.lower()
         or "lilium" in model_name.lower()
@@ -157,6 +156,7 @@ def load_pretrained_model(
         elif "lora" in model_name.lower() and model_base is not None:
             from llava.model.language_model.llava_llama import LlavaConfig
 
+            print("model_path", model_path)
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             print("Loading LLaVA from base model...")

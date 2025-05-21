@@ -14,6 +14,9 @@ export HF_DATASETS_CACHE=/mnt/nushare2/data/vorshulevich/.cache/huggingface/data
 export TORCH_EXTENSIONS_DIR=/mnt/nushare2/data/vorshulevich/.llm_cache/torch_cache
 export TRITON_CACHE_DIR=/mnt/nushare2/data/vorshulevich/.triton/autotune
 
+
+pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+
 export OMP_NUM_THREADS=8
 export NCCL_IB_DISABLE=0
 export NCCL_IB_GID_INDEX=3
@@ -22,92 +25,84 @@ export NCCL_DEBUG=INFO
 export TORCH_NCCL_ENABLE_MONITORING=0
 export HF_DATASETS_OFFLINE=1
 
-
 RANK=${RANK:-0}
 ADDR=${ADDR:-"127.0.0.1"}
 PORT=${PORT:-"29501"}
 NNODES=${NNODES:-1}
 NUM_GPUS=${NUM_GPUS:-1}
 
-# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 cd /opt/krylov-workflow/src/run_fn_0/
-
-
-# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
-# 
 
 # First job
 echo "Starting pretraining job..."
 CAP_EPOCHS=1
 
-# MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
-# MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
+MLP=mlp2x_gelu
+
+MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
+MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
 # MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
 # MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
-MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
-MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
 #standard llava pretraining data
 DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json
 # ## share gpt4v pretraining data
-# DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/share_gpt4v_format_adjusted_share-captioner_coco_lcs_sam_1246k_1107.json
 IMG_DIR='None' 
 FILE_NAME_CAP=$(echo "${DATA_PATH##*/}" | cut -d'_' -f1,2)
 
 echo DATAFILE_NAME=$FILE_NAME_CAP
 
 VIS_TOWER=/mnt/nushare2/data/baliao/multimodal/model_zoos/openai/clip-vit-large-patch14-336
+# VIS_TOWER=/mnt/nushare2/data/vorshulevich/models/siglip2-so400m-patch14-384
 VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_RUN_NAME="todel_$MLP-second_run-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
 BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
 
 TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
-# mkdir -p $BASE_SAVE_DIR
-
-# CUDA_LAUNCH_BLOCKING=1
-# ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
-#     llava/train/train_mem.py \
-#     --deepspeed scripts/zero3.json \
-#     --model_name_or_path $MODEL_DIR \
-#     --version llama3 \
-#     --data_path $DATA_PATH \
-#     --image_folder $IMG_DIR \
-#     --vision_tower $VIS_TOWER \
-#     --mm_projector_type mlp2x_gelu \
-#     --tune_mm_mlp_adapter True \
-#     --mm_vision_select_layer -2 \
-#     --mm_use_im_start_end False \
-#     --mm_use_im_patch_token False \
-#     --bf16 True \
-#     --output_dir $BASE_SAVE_DIR \
-#     --num_train_epochs $CAP_EPOCHS \
-#     --per_device_train_batch_size 8 \
-#     --per_device_eval_batch_size 4 \
-#     --gradient_accumulation_steps 4 \
-#     --evaluation_strategy "no" \
-#     --save_strategy "steps" \
-#     --save_steps 24000 \
-#     --save_total_limit 1 \
-#     --learning_rate 1e-3 \
-#     --weight_decay 0. \
-#     --warmup_ratio 0.03 \
-#     --lr_scheduler_type "cosine" \
-#     --logging_steps 1 \
-#     --tf32 True \
-#     --model_max_length 2048 \
-#     --gradient_checkpointing True \
-#     --dataloader_num_workers 1 \
-#     --lazy_preprocess True \
-#     --report_to none \
-#     --sam2_masking_token True \
-#     --custom_rotary_embedding False \
-#     --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
+mkdir -p $BASE_SAVE_DIR
+ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
+    llava/train/train_mem.py \
+    --deepspeed scripts/zero3.json \
+    --model_name_or_path $MODEL_DIR \
+    --version llama3 \
+    --data_path $DATA_PATH \
+    --image_folder $IMG_DIR \
+    --vision_tower $VIS_TOWER \
+    --mm_projector_type $MLP \
+    --tune_mm_mlp_adapter True \
+    --mm_vision_select_layer -2 \
+    --mm_use_im_start_end False \
+    --mm_use_im_patch_token False \
+    --bf16 True \
+    --output_dir $BASE_SAVE_DIR \
+    --num_train_epochs $CAP_EPOCHS \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 4 \
+    --evaluation_strategy "no" \
+    --save_strategy "steps" \
+    --save_steps 24000 \
+    --save_total_limit 1 \
+    --learning_rate 1e-3 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --tf32 True \
+    --model_max_length 2048 \
+    --gradient_checkpointing True \
+    --dataloader_num_workers 4 \
+    --lazy_preprocess True \
+    --report_to none \
+    --sam2_masking_token True \
+    --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
 
 
 
@@ -115,12 +110,12 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 echo "Starting finetuning job..."
 SFT_EPOCHS=1
 
-# MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
-# MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
+MLP=mlp2x_gelu
+
+MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
+MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
 # MODEL_NAME="meta-llama--Llama-3.2-1B-Instruct"
 # MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
-MODEL_NAME="meta-llama--Llama-3.2-3B-Instruct"
-MODEL_DIR=/mnt/nushare2/data/mnulli/model_zoos/language_models/${MODEL_NAME}
 
 DATA_PATH_SFT=/mnt/nushare2/data/mnulli/verified_conversations/finetuningdata/llava_mix665k_format_adjusted.json
 IMG_DIR='None' 
@@ -130,22 +125,19 @@ FILE_NAME_SFT=$(echo "${DATA_PATH_SFT##*/}" | cut -d'_' -f1,2)
 echo DATAFILE_NAME=$FILE_NAME_SFT
 
 VIS_TOWER=/mnt/nushare2/data/baliao/multimodal/model_zoos/openai/clip-vit-large-patch14-336
+# VIS_TOWER=/mnt/nushare2/data/vorshulevich/models/siglip2-so400m-patch14-384
 VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
-
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
-SFT_RUN_NAME="todel_noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$SFT_EPOCHS-EPOCHS"
+SFT_RUN_NAME="todel_$MLP-second_run-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$CAP_EPOCHS-capEpochs-$SFT_EPOCHS-sftEpochs"
 
 PROJECTOR=${BASE_SAVE_DIR}/mm_projector.bin
 MASK_TOKEN=${BASE_SAVE_DIR}/mm_bom_mask_token.bin
 
 SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/sft/${SFT_RUN_NAME}
 
-# TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
-mkdir -p $SAVE_DIR
-
-CUDA_LAUNCH_BLOCKING=1
+# mkdir -p $SAVE_DIR
 ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NNODES}" --node_rank="${RANK}" --master_addr="${ADDR}" --master_port="${PORT}" \
     llava/train/train_mem.py \
     --deepspeed scripts/zero3.json \
@@ -157,7 +149,7 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --vision_tower $VIS_TOWER \
     --pretrain_mm_mlp_adapter $PROJECTOR \
     --pretrain_mm_bom_mask_token $MASK_TOKEN \
-    --mm_projector_type mlp2x_gelu \
+    --mm_projector_type $MLP \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
@@ -182,10 +174,9 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --tf32 True \
     --model_max_length 2048 \
     --gradient_checkpointing True \
-    --dataloader_num_workers 1 \
+    --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to none \
-    --overwrite_output_dir \
     --sam2_masking_token True \
-    --custom_rotary_embedding True \
+    --overwrite_output_dir \
     2>&1 | tee $SAVE_DIR/out

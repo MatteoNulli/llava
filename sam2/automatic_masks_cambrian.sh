@@ -33,7 +33,7 @@ pip install --upgrade --proxy http://httpproxy-tcop.vip.ebay.com:80 iopath
 SAM2_CHECKPOINT=/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data/checkpoints/sam2.1_hiera_large.pt # SAM2_CHECKPOINT=PATH TO SAM2 CHECKPOINT (.pt)
 DEVICE=cuda
 
-PARTITION_ID=5
+PARTITION_ID=4
 TOTAL_PARTITIONS=10
 
 MODEL_CFG=configs/sam2.1/sam2.1_hiera_l.yaml

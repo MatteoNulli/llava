@@ -65,6 +65,8 @@ class Llava(lmms):
         truncation: Optional[bool] = True,
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
+        sam2_masking_token: Optional[bool] = False,
+        custom_rotary_embedding: Optional[bool] = False,
         model_name=None,
         model_base: str = None,
         attn_implementation=best_fit_attn_implementation,
@@ -122,6 +124,8 @@ class Llava(lmms):
         self.conv_template = conv_template
         self.use_cache = use_cache
         self.truncate_context = truncate_context
+        self.sam2_masking_token = sam2_masking_token
+        self.custom_rotary_embedding = custom_rotary_embedding
         # assert self.batch_size_per_gpu == 1, "Llava currently does not support batched generation. See https://github.com/haotian-liu/LLaVA/issues/754. HF Llava also has this issue."
         if accelerator.num_processes > 1:
             assert accelerator.distributed_type in [DistributedType.FSDP, DistributedType.MULTI_GPU, DistributedType.DEEPSPEED], "Unsupported distributed type provided. Only DDP and FSDP are supported."
@@ -360,24 +364,30 @@ class Llava(lmms):
 
             split = split[0]
             batched_visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]  # [B, N]
+            self.model.model.sam2_masking_token = False
+            self.model.model.custom_rotary_embedding = False
             if task == "cvbench":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/nyu-cvbench/arrays"
-                self.model.sam2_masking_token = False
+                self.model.model.sam2_masking_token = True
+                self.model.model.custom_rotary_embedding = False
             elif task == "mmvp":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmvp/arrays"
-                self.model.sam2_masking_token = False
+                self.model.model.sam2_masking_token = True
+                self.model.model.custom_rotary_embedding = False
             elif task == "aro-visual-relation":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/gowitheflow___aro-visual-relation/arrays"
-                self.model.sam2_masking_token = True
+                self.model.model.sam2_masking_token = False
+                self.model.model.custom_rotary_embedding = False
             elif task == "mme":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mme/arrays"
-                self.model.sam2_masking_token = True
+                self.model.model.sam2_masking_token = False
+                self.model.model.custom_rotary_embedding = False
             elif task == "mmstar":
                 base_dir = "/mnt/nushare2/data/mnulli/thesis/data/sam2/segmentation_data_benchmarks/mmstar/arrays"
-                self.model.sam2_masking_token = True
-            else:
-                self.model.sam2_masking_token = False
-            if self.model.sam2_masking_token:
+                self.model.model.sam2_masking_token = False
+                self.model.model.custom_rotary_embedding = False
+
+            if self.model.model.sam2_masking_token:
                 for idx, visual in enumerate(batched_visuals):
                     image_id = visual[-1]
 
@@ -395,7 +405,7 @@ class Llava(lmms):
                     elif len(masks) == 0 and self.config.mm_projector_type == "subobject_tokenization":
                         masks = torch.stack([torch.ones(visual[0].size, dtype=torch.bool)]).unsqueeze(0)
                     else:
-                        self.model.sam2_masking_token = False
+                        self.model.model.sam2_masking_token = False
 
             batched_visuals = [[batched_visuals[0][0]]]
             flattened_visuals = self.flatten(batched_visuals)  # [B*N]
@@ -472,7 +482,7 @@ class Llava(lmms):
                 gen_kwargs["num_beams"] = 1
 
             # print("question_input", question_input)
-            # print("self.model.sam2_masking_token", self.model.sam2_masking_token)
+            # print("self.model.model.sam2_masking_token", self.model.model.sam2_masking_token)
             # if "<image>" not in question_input[0]:
             # print("question_input", question_input)
             input_ids_list = [tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt") for prompt in question_input]
@@ -482,7 +492,7 @@ class Llava(lmms):
             # These steps are not in LLaVA's original code, but are necessary for generation to work
             # TODO: attention to this major generation step...
             try:
-                if self.model.sam2_masking_token:
+                if self.model.model.sam2_masking_token:
                     cont = self.model.generate(
                         input_ids,
                         attention_mask=attention_masks,

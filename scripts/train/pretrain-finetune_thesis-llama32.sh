@@ -40,6 +40,10 @@ cd /opt/krylov-workflow/src/run_fn_0/
 # First job
 echo "Starting pretraining job..."
 CAP_EPOCHS=1
+SAM2_MASKING_TOKEN=True
+CUSTOM_ROTARY_EMBEDDING=False
+
+echo "Pretraining initialized with SAM2_MASKING_TOKEN=$SAM2_MASKING_TOKEN and CUSTOM_ROTARY_EMBEDDING=$CUSTOM_ROTARY_EMBEDDING"
 
 # MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 # MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
@@ -63,10 +67,9 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
 
-BASE_RUN_NAME="noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
-BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning/${BASE_RUN_NAME}
+BASE_RUN_NAME="abs_pos_emb_noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$CAP_EPOCHS-EPOCHS"
+BASE_SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/captioning_3b/${BASE_RUN_NAME}
 
-TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
 # mkdir -p $BASE_SAVE_DIR
 
@@ -105,7 +108,8 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 #     --dataloader_num_workers 1 \
 #     --lazy_preprocess True \
 #     --report_to none \
-#     --sam2_masking_token True \
+#     --sam2_masking_token $SAM2_MASKING_TOKEN \
+#     --custom_rotary_embedding $CUSTOM_ROTARY_EMBEDDING \
 #     --overwrite_output_dir 2>&1 | tee $BASE_SAVE_DIR/out
 
 
@@ -113,6 +117,10 @@ TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 # Second job
 echo "Starting finetuning job..."
 SFT_EPOCHS=1
+SAM2_MASKING_TOKEN=True
+CUSTOM_ROTARY_EMBEDDING=False
+
+echo "SFT initialized with SAM2_MASKING_TOKEN=$SAM2_MASKING_TOKEN and CUSTOM_ROTARY_EMBEDDING=$CUSTOM_ROTARY_EMBEDDING"
 
 # MODEL_NAME="Meta-Llama-3_1-8B-Instruct"
 # MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
@@ -133,14 +141,15 @@ VIS_TOWER_NAME=$(echo "$VIS_TOWER" | awk -F'/' '{print $(NF-1)"-"$NF}')
 
 echo VIS_TOWER_NAME=$VIS_TOWER_NAME
 
-SFT_RUN_NAME="noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$SFT_EPOCHS-EPOCHS"
+SFT_RUN_NAME="abs_pos_emb_noglob-$MODEL_NAME-$VIS_TOWER_NAME-$FILE_NAME_CAP-$FILE_NAME_SFT-lora-$SFT_EPOCHS-EPOCHS"
+
+echo SFT_RUN_NAME=$SFT_RUN_NAME
 
 PROJECTOR=${BASE_SAVE_DIR}/mm_projector.bin
 MASK_TOKEN=${BASE_SAVE_DIR}/mm_bom_mask_token.bin
 
-SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/sft/${SFT_RUN_NAME}
+SAVE_DIR=/mnt/nushare2/data/mnulli/thesis/testruns/sft_3b/${SFT_RUN_NAME}
 
-# TOOL_DIR=/data/chatgpt/notebooks/mnulli/llava
 
 mkdir -p $SAVE_DIR
 
@@ -185,5 +194,6 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --lazy_preprocess True \
     --report_to none \
     --overwrite_output_dir \
-    --sam2_masking_token True \
+    --sam2_masking_token $SAM2_MASKING_TOKEN \
+    --custom_rotary_embedding $CUSTOM_ROTARY_EMBEDDING \
     2>&1 | tee $SAVE_DIR/out

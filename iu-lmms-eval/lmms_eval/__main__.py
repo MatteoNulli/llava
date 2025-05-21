@@ -30,6 +30,7 @@ from lmms_eval.utils import (
     handle_non_serializable,
     make_table,
     simple_parse_args_string,
+    str2bool,
 )
 
 
@@ -120,6 +121,18 @@ def parse_eval_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Device to use (e.g. cuda, cuda:0, cpu)",
+    )
+    parser.add_argument(
+        "--sam2_masking_token",
+        type=str2bool,
+        default=False,  # omitted → False
+        help="Use SAM2 masking token? (True/False)",
+    )
+    parser.add_argument(
+        "--custom_rotary_embedding",
+        type=str2bool,
+        default=False,  # omitted → False
+        help="Switchign on/off custom rotary embedding (default: False)",
     )
     parser.add_argument(
         "--output_path",
@@ -473,6 +486,8 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
         tasks=task_names,
         num_fewshot=args.num_fewshot,
         batch_size=args.batch_size,
+        sam2_masking_token=args.sam2_masking_token,
+        custom_rotary_embedding=args.custom_rotary_embedding,
         max_batch_size=args.max_batch_size,
         device=args.device,
         use_cache=args.use_cache,
@@ -522,7 +537,11 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
 
 
 def print_results(args, results):
-    print(f"{args.model} ({args.model_args}),\ngen_kwargs: ({args.gen_kwargs}),\nlimit: {args.limit},\nnum_fewshot: {args.num_fewshot},\nbatch_size: {args.batch_size}")
+    print(
+        f"{args.model} ({args.model_args}),\ngen_kwargs: ({args.gen_kwargs}),\nlimit: {args.limit},\nnum_fewshot: {args.num_fewshot},\nbatch_size: {args.batch_size}",
+        f"\nsam2_masking_token: {args.sam2_masking_token}",
+        f"\ncustom_rotary_embedding: {args.custom_rotary_embedding}",
+    )
     print(evaluator.make_table(results))
     if "groups" in results:
         print(evaluator.make_table(results, "groups"))

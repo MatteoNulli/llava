@@ -46,6 +46,16 @@ HIGHER_IS_BETTER_SYMBOLS = {
     False: "↓",
 }
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    val = v.lower()
+    if val in ("yes", "true",  "t", "y", "1"):
+        return True
+    if val in ("no",  "false", "f", "n", "0"):
+        return False
+    raise argparse.ArgumentTypeError("Boolean value expected (True/False)")
+
 
 def is_json(string):
     try:
@@ -768,7 +778,7 @@ class MultiTokenEOSCriteria(transformers.StoppingCriteria):
         sequence: str,
         tokenizer: transformers.PreTrainedTokenizer,
         initial_decoder_input_length: int,
-        batch_size: int,
+        x: int,
     ) -> None:
         self.initial_decoder_input_length = initial_decoder_input_length
         self.done_tracker = [False] * batch_size

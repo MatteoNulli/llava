@@ -67,6 +67,7 @@ llava_pth = os.path.abspath(
     os.path.join(os.path.split(__file__)[0], "../../../")
 )  # -> /data/chatgpt/notebooks/mnulli/llava/llava/eval/conme/ -> /data/chatgpt/notebooks/mnulli/llava/
 sys.path.append(f"{llava_pth}")
+print("llava_pth", llava_pth)
 
 from llava.constants import (
     IMAGE_TOKEN_INDEX,
@@ -175,16 +176,16 @@ def load_generative_model(args, device):
         cambrian_pth = os.path.abspath(
             os.path.join(os.path.split(__file__)[0], "../../../cambrian")
         )  # -> /data/chatgpt/notebooks/mnulli/llava/llava/eval/conme/ --> /data/chatgpt/notebooks/mnulli/llava/cambrian
-        print("cambrian_pth", cambrian_pth)
-        sys.path.append(f"{cambrian_pth}")
+        # print("cambrian_pth", cambrian_pth)
+        # sys.path.append(f"{cambrian_pth}")
 
-        from cambrian.conversation import conv_templates
-        from cambrian.mm_utils import (
-            get_model_name_from_path,
-            process_images,
-            tokenizer_image_token,
-        )
-        from cambrian.model.builder import load_pretrained_model
+        # from cambrian.conversation import conv_templates
+        # from cambrian.mm_utils import (
+        #     get_model_name_from_path,
+        #     process_images,
+        #     tokenizer_image_token,
+        # )
+        # from cambrian.model.builder import load_pretrained_model
 
         pretrained = args.model_path
         device = (
@@ -254,7 +255,13 @@ def load_generative_model(args, device):
         model = model.to(device="cuda:0", dtype=torch.float16)
 
         if args.sam2:
-            model.sam2_masking_token = True
+            model.model.sam2_masking_token = True
+        else:
+            model.model.sam2_masking_token = False
+        if args.custom_rotary_embedding:
+            model.model.custom_rotary_embedding = True
+        else:
+            model.model.custom_rotary_embedding = False
 
     model.to(device)
 
@@ -630,7 +637,7 @@ def eval(args):
                     )
 
                     image_tensor = process_images([image], processor, model.config)[0]
-                    if model.sam2_masking_token:
+                    if model.model.sam2_masking_token:
                         with torch.inference_mode():
                             attention_mask = torch.ones_like(input_ids)
                             output_ids = model.generate(
@@ -696,6 +703,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--sam2", type=str, default=False)
+    parser.add_argument("--custom_rotary_embedding", type=str, default=False)
     parser.add_argument("--image-folder", type=str, default="")
     parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
     parser.add_argument("--answers-file", type=str, default="answer.jsonl")

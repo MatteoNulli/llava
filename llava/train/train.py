@@ -195,6 +195,7 @@ def get_peft_state_non_lora_maybe_zero_3(named_params, require_grad_only=True):
 def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
     to_return = {
         k: t
+        
         for k, t in named_params
         if any(key_match in k for key_match in keys_to_match)
     }
@@ -1711,7 +1712,7 @@ def train(attn_implementation=None):
         )
         if model_args.tune_mm_mlp_adapter:
             model.requires_grad_(False)
-            if model.config.mm_projector_type == "subobject_tokenization":
+            if model.config.mm_projector_type == "subobject_tokenization" and hasattr(model.get_model(), "mm_subobject_projector"):
                 for p in model.get_model().mm_subobject_projector.parameters():
                     p.requires_grad = True
 

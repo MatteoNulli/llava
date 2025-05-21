@@ -319,6 +319,49 @@ class LLaVATrainer(Trainer):
 
         return self.optimizer
 
+    # def _save_checkpoint(self, model, trial, metrics=None):
+    #     import torch.distributed as dist
+
+    #     try:
+    #         if getattr(self.args, "tune_mm_mlp_adapter", False):
+    #             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+    #             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+    #             run_dir = self._get_output_dir(trial=trial)
+    #             output_dir = os.path.join(run_dir, checkpoint_folder)
+
+    #             # Only save adapter weights on rank 0
+    #             keys_to_match = ["mm_projector", "vision_resampler"]
+    #             if getattr(self.args, "use_im_start_end", False):
+    #                 keys_to_match.extend(["embed_tokens", "embed_in"])
+
+    #             if self.args.local_rank in (0, -1):
+    #                 weight_to_save = get_mm_adapter_state_maybe_zero_3(
+    #                     self.model.named_parameters(), keys_to_match
+    #                 )
+    #                 torch.save(
+    #                     weight_to_save,
+    #                     os.path.join(output_dir, "mm_projector.bin"),
+    #                 )
+
+    #                 # Same for the BOM masking token
+    #                 keys_to_match_bom = ["mm_bom_mask_token"]
+    #                 weight_to_save_bom = get_mm_adapter_state_maybe_zero_3(
+    #                     self.model.named_parameters(), keys_to_match_bom
+    #                 )
+    #                 torch.save(
+    #                     weight_to_save_bom,
+    #                     os.path.join(output_dir, "mm_bom_mask_token.bin"),
+    #                 )
+    #         else:
+    #             try:
+    #                 super()._save_checkpoint(model, trial, metrics)
+    #             except TypeError:
+    #                 super()._save_checkpoint(model, metrics)
+    #     finally:
+    #         if dist.is_initialized():
+    #             dist.barrier()
+
     def _save_checkpoint(self, model, trial, metrics=None):
         if getattr(self.args, "tune_mm_mlp_adapter", False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR

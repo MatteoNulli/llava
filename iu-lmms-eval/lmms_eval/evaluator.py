@@ -55,6 +55,8 @@ def simple_evaluate(
     batch_size: Optional[Union[int, str]] = None,
     max_batch_size: Optional[int] = None,
     device: Optional[str] = None,
+    sam2_masking_token: Optional[bool] = False,
+    custom_rotary_embedding: Optional[bool] = False,
     use_cache: Optional[str] = None,
     cache_requests: bool = False,
     rewrite_requests_cache: bool = False,
@@ -235,6 +237,8 @@ def simple_evaluate(
         evaluation_tracker.general_config_tracker.log_experiment_args(
             model_source=model,
             model_args=model_args,
+            sam2_masking_token=sam2_masking_token,
+            custom_rotary_embedding=custom_rotary_embedding,
             system_instruction=system_instruction,
             chat_template=lm.chat_template if apply_chat_template else None,
             fewshot_as_multiturn=fewshot_as_multiturn,
@@ -272,6 +276,8 @@ def simple_evaluate(
         results["config"] = {
             "model": model_name,
             "model_args": model_args,
+            "sam2_masking_token": sam2_masking_token,
+            "custom_rotary_embedding": custom_rotary_embedding,
         }
         # add more detailed model info if available TODO: add model info
         # if isinstance(lm, lm_eval.models.huggingface.HFLM):

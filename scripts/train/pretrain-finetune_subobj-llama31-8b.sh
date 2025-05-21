@@ -49,7 +49,6 @@ MODEL_DIR=/mnt/mtrepo/data/wwalentynowicz/models/${MODEL_NAME}
 #standard llava pretraining data
 DATA_PATH=/mnt/nushare2/data/mnulli/pretrainingdata/blip_laion_cc_sbu_558k.json
 # ## share gpt4v pretraining data
-# DATA_PATH=/mnt/nushare2/data/mnulli/thesis/data/training_data/sharegpt4v_captioning_data/share_gpt4v_format_adjusted_share-captioner_coco_lcs_sam_1246k_1107.json
 IMG_DIR='None' 
 FILE_NAME_CAP=$(echo "${DATA_PATH##*/}" | cut -d'_' -f1,2)
 

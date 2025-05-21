@@ -42,7 +42,12 @@ from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM, BOMMaskToken
 
 
 class MyLlamaRotaryEmbedding(nn.Module):
-    def __init__(self, config: LlamaConfig, device=None):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        # group_ranges: Optional[List[List[Tuple[int, int]]]],
+        device=None,
+    ):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
@@ -66,7 +71,7 @@ class MyLlamaRotaryEmbedding(nn.Module):
         #               (start, end) tuples indicating intervals within
         #               which all tokens should share the same pos‐id.
         #               If None, falls back to original per‐token positions.
-        self.group_ranges: Optional[List[List[Tuple[int, int]]]] = None
+        self.group_ranges: Optional[List[List[Tuple[int, int]]]] = [[(0, 1)]]
 
     @torch.no_grad()
     def forward(
@@ -79,7 +84,7 @@ class MyLlamaRotaryEmbedding(nn.Module):
         position_ids: [1, seq_len]       absolute token positions
         """
         batch_size, seq_len, _ = x.shape
-
+        print("self.group_ranges", self.group_ranges)
         # 1) Expand the shared position_ids to full batch
         updated_pos_ids = position_ids
         if updated_pos_ids.shape[0] == 1 and batch_size > 1:
@@ -174,8 +179,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         # print('before requires_grad: ', input_ids.requires_grad)  # Output: False
         # input_ids.requires_grad = True
         # print('after requires_grad: ', input_ids.requires_grad)  # Output: True
-        if self.model.custom_rotary_embedding:
-            self.model.rotary_emb = MyLlamaRotaryEmbedding(self.config)
+        # if getattr(self.model, "custom_rotary_embedding", False):
+        #     self.model.rotary_emb = MyLlamaRotaryEmbedding(self.config)
+
         if inputs_embeds is None:
             (
                 input_ids,
@@ -217,8 +223,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         image_sizes: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
+        if getattr(self.model, "custom_rotary_embedding", False):
+            self.model.rotary_emb = MyLlamaRotaryEmbedding(self.config)
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
+
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 

@@ -10,20 +10,20 @@ export NO_PROXY=krylov,ams,ems,mms,localhost,127.0.0.1,.vip.hadoop.ebay.com,.vip
 
 
 NUM_MACHINES=${NUM_MACHINES:-1}
-NUM_GPUS=${NUM_GPUS:-8}
+NUM_GPUS=${NUM_GPUS:-2}
 
 cd /opt/krylov-workflow/src/run_fn_0/iu-lmms-eval/
 
 
 pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 openpyxl
-pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
+# pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 pycocotools
 
 ##comp + cv oriented
 # TASK=aro-coco-order,aro-flickr-order,aro-visual-attribution,aro-visual-relation
 # TASK=cvbench,mmvp
 # other tasks
-TASK=ai2d,mme,mmbench_en_dev,mmstar,realworldqa
-# TASK=mmvp,cvbench,aro-coco-order,aro-flickr-order,aro-visual-attribution,aro-visual-relation
+# TASK=ai2d,mme,mmbench_en_dev,mmstar,realworldqa
+TASK=mmvp,cvbench,ai2d,mme,mmbench_en_dev,mmstar,realworldqa
 
 # if [[ "$TASK" =~ mmbench ]]; then
 #     pip install --proxy http://httpproxy-tcop.vip.ebay.com:80 openpyxl
@@ -42,14 +42,21 @@ TASK=ai2d,mme,mmbench_en_dev,mmstar,realworldqa
 # CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft/8bs_avg_global-view-Meta-Llama-3_1-8B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-2-capEpochs-1-EPOCHS
 # # CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft_standard_llava/standard_llava15-meta-llama--Llama-3.2-1B-Instruct-openclip-bliplaion-lora-1-EPOCHS
 # # CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft_standard_llava/standard_llava15-Meta-Llama-3_1-8B-Instruct-openclip-bliplaion-lora
-CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft/8bs_avg_global-view-Meta-Llama-3_1-8B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-2-capEpochs-2-sftEpochs
+# CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft/8bs_avg_global-view-Meta-Llama-3_1-8B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-2-capEpochs-2-sftEpochs
 
 
-MODEL_BASE=/mnt/mtrepo/data/wwalentynowicz/models/Meta-Llama-3_1-8B-Instruct
-# # MODEL_BASE=/mnt/nushare2/data/mnulli/model_zoos/language_models/meta-llama--Llama-3.2-1B-Instruct
-# # builder in LLava expect a particular model_name for parsing
+# CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft/noglob-meta-llama--Llama-3.2-3B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-1-EPOCHS
+# CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft_3b/image_filling_noglob-meta-llama--Llama-3.2-3B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-1-EPOCHS
+CKPT_PATH=/mnt/nushare2/data/mnulli/thesis/testruns/sft_standard_llava/standard-meta-llama--Llama-3.2-3B-Instruct-openai-clip-vit-large-patch14-336-blip_laion-llava_mix665k-lora-1-EPOCHS
+
+
+# MODEL_BASE=/mnt/mtrepo/data/wwalentynowicz/models/Meta-Llama-3_1-8B-Instruct
+MODEL_BASE=/mnt/nushare2/data/mnulli/model_zoos/language_models/meta-llama--Llama-3.2-3B-Instruct
+# MODEL_BASE=/mnt/nushare2/data/mnulli/model_zoos/language_models/meta-llama--Llama-3.2-1B-Instruct
+# builder in LLava expect a particular model_name for parsing
 MODEL_NAME=llava
 CONV_MODE=llama3
+
 MODEL_ARGS=pretrained=$CKPT_PATH,model_base=$MODEL_BASE,conv_template=$CONV_MODE
 
 # CKPT_PATH=/mnt/nushare2/data/mnulli/model_zoos/opensource-vlms/models--llava-hf--llama3-llava-next-8b-hf/snapshots/b041c0d0ea0dd0196d147206c210c8d1752fc2da

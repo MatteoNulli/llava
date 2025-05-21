@@ -44,6 +44,8 @@ class GeneralConfigTracker:
 
     model_source: str = None
     model_name: str = None
+    sam2_masking_token: bool = False
+    custom_rotary_embedding: bool = False
     model_name_sanitized: str = None
     system_instruction: str = None
     system_instruction_sha: str = None
@@ -78,6 +80,8 @@ class GeneralConfigTracker:
         self,
         model_source: str,
         model_args: str,
+        sam2_masking_token: bool,
+        custom_rotary_embedding: bool,
         system_instruction: str,
         chat_template: str,
         fewshot_as_multiturn: bool,
@@ -91,6 +95,8 @@ class GeneralConfigTracker:
         self.chat_template = chat_template
         self.chat_template_sha = hash_string(chat_template) if chat_template else None
         self.fewshot_as_multiturn = fewshot_as_multiturn
+        self.sam2_masking_token = sam2_masking_token
+        self.custom_rotary_embedding = custom_rotary_embedding
 
     def log_end_time(self) -> None:
         """Logs the end time of the evaluation and calculates the total evaluation time."""
@@ -139,6 +145,8 @@ class EvaluationTracker:
         self.general_config_tracker = GeneralConfigTracker()
 
         self.output_path = output_path
+        self.sam2_masking_token = True
+        self.custom_rotary_embedding = True
         self.push_results_to_hub = push_results_to_hub
         self.push_samples_to_hub = push_samples_to_hub
         self.public_repo = public_repo

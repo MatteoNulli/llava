@@ -2,14 +2,30 @@ import numpy as np
 import cv2
 import torch
 import torch.nn.functional as F
-from torch import nn
 import torchvision.ops as ops
+import itertools
+import math
 
 
+from typing import List, Callable, Optional, Tuple, Union, Sequence
+from torch import nn
 from dataclasses import dataclass, field
 
 
-def check_resised_image_masks(resized_image_masks, device="cuda"):
+def check_device_type_shape(resized_image_masks, image_features):
+    for m in resized_image_masks:
+        assert (
+            m.device == image_features.device
+        ), f"mask device {m.device} doesn't match features {image_features.device}"
+        assert (
+            m.dtype == torch.bool
+        ), f"mask dtype {m.dtype} doesn't match features {torch.bool}"
+        assert (
+            m.shape[0] == image_features.shape[0]
+        ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
+
+
+def check_resised_image_masks(resized_image_masks, image_features, device="cuda"):
     """
     Cleaning resized_image_masks.
     Either by replacing replace the only element with an all-True mask
@@ -25,6 +41,7 @@ def check_resised_image_masks(resized_image_masks, device="cuda"):
         resized_image_masks = [m for m in resized_image_masks if m.any().item()]
 
     resized_image_masks = [m.to(device) for m in resized_image_masks]
+    check_device_type_shape(resized_image_masks, image_features)
 
     return resized_image_masks
 
@@ -189,271 +206,6 @@ def create_sliding_masks(ve_dim, dtype=torch.bool, device="cuda", num_masks=10):
     return masks
 
 
-class BatchedMaskEmbedder(torch.nn.Module):
-
-    def __init__(
-        self,
-        model,
-        get_model,
-        config,
-        vision_tower,
-        global_view=False,
-        averaging=False,
-        mask_removing=False,
-        mask_limiting=False,
-        mask_limit=20,
-        averaging_global_view=False,
-        no_masktoken=False,
-        use_sliding_window=False,
-        use_dummy_masks=False,
-        number_of_masks=10,
-    ):
-        super(BatchedMaskEmbedder, self).__init__()
-
-        # objects
-        self.model = model
-        self.get_model = get_model
-        self.config = config
-        self.vision_encoder = vision_tower
-
-        # bool values
-        self.global_view = global_view
-        self.mask_removing = mask_removing
-        self.averaging = averaging
-        self.mask_limiting = mask_limiting
-        self.averaging_global_view = averaging_global_view
-        self.no_masktoken = no_masktoken
-
-        # bool values for ablations
-        self.use_sliding_window = use_sliding_window
-        self.use_dummy_masks = use_dummy_masks
-        self.number_of_masks = number_of_masks
-
-        # other
-        self.mask_limit = mask_limit
-
-    @property
-    def dtype(self):
-        return self.vision_encoder.dtype
-
-    @property
-    def device(self):
-        return self.vision_encoder.device
-
-    def downsample_masks(
-        self,
-        images_features,
-        masks_batch,
-    ):
-        """
-        Applies masks to the image features and appends special tokens signaling the masked feature start/end.
-
-        Parameters:
-            images_features (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
-            masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
-                                        the inner Tensors are of size (n. of masks, (image_h, image_w)).
-
-        Returns:
-            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
-        """
-
-        batch_size, ve_dim, feature_dim = images_features.shape
-        # Create a tensor by padding masks_batch
-        # Step 1: Determine the target shape for each dimension
-        target_nummasks = max(mask.shape[0] for mask in masks_batch)
-        target_height, target_width = self.image_h, self.image_w
-        # Step 2: Pad each mask to the target shape
-        padded_masks = [
-            adjust_tensor_size(mask, target_nummasks, target_height, target_width)
-            for mask in masks_batch
-        ]
-        masks_batch = torch.stack(padded_masks)
-
-        if self.use_sliding_window:
-            resized_image_masks = torch.stack(
-                [
-                    torch.tensor(
-                        create_sliding_masks(
-                            ve_dim,
-                            device=images_features.device,
-                            num_masks=self.number_of_masks,
-                        )
-                    )
-                    for i in range(batch_size)
-                ]
-            ).to(images_features.device)
-        elif self.use_dummy_masks:
-            resized_image_masks = torch.stack(
-                [
-                    torch.tensor(
-                        create_deterministic_dummy_masks(
-                            ve_dim,
-                            device=images_features.device,
-                            num_masks=self.number_of_masks,
-                        )
-                    )
-                    for i in range(batch_size)
-                ]
-            ).to(images_features.device)
-        else:
-            resized_image_masks = torch.stack(
-                [
-                    downsample_mask_to_1d_counts(
-                        mask, ve_dim, device=images_features.device
-                    ).to(images_features.device)
-                    for image_masks in masks_batch
-                    for mask in image_masks
-                ]
-            )
-            resized_image_masks = resized_image_masks.view(
-                batch_size, target_nummasks, -1
-            ).to(images_features.device)
-
-        return resized_image_masks
-
-    def apply_masks(self, images_features, resized_image_masks):
-        """
-        Applies masks to the image features.
-
-        Parameters:
-            images_features (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
-            resized_image_masks (torch.Tensor): Tensor of shape (batch_size, M, vision_encoder_dim). M is the maximum number of masks across the batch.
-
-        Returns:
-            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, M, y, feature_dim), where y varies based on the method / number of masks for each image and number of True values per mask.
-        """
-        if self.global_view:
-            ## include a mask which is f
-            whole_image_mask = torch.ones(
-                (batch_size, 1, ve_dim),
-                dtype=resized_image_masks.dtype,
-                device=resized_image_masks.device,
-            )
-            resized_image_masks = torch.cat(
-                [whole_image_mask, resized_image_masks], dim=1
-            )
-
-        batch_size, M, ve_dim = tuple(resized_image_masks.shape)
-        F = images_features.shape[-1]  # aka feature_dim
-
-        # 1. Count the number of True entries per [B, M] and find the maximum count.
-        counts = resized_image_masks.sum(dim=-1)  # shape: [B, M]
-        self.max_count = int(
-            counts.max().item()
-        )  # scalar (largest number of True values)
-
-        # 2. Expand images_features so that each mask sees [ve_dim, F]:
-        #    From [B, ve_dim, F] --> [B, 1, ve_dim, F] and then expand to [B, M, ve_dim, F]
-        image_features_expanded = images_features.unsqueeze(1).expand(
-            batch_size, M, ve_dim, F
-        )
-
-        # 3. Compute an ordering index for the D-dimension that preserves original order.
-        #    Create an index tensor for positions 0...D-1.
-        order = (
-            torch.arange(ve_dim, device=images_features.device)
-            .view(1, 1, ve_dim)
-            .expand(batch_size, M, ve_dim)
-        )
-        # For positions where the mask is False, substitute a large value (here, D).
-        order_masked = torch.where(
-            resized_image_masks, order, torch.full_like(order, ve_dim)
-        )
-        # When you sort order_masked along the D dimension (ascending), the True indices (with
-        # their original order) will appear first and the False ones will be pushed to the end.
-        _, sort_indices = torch.sort(order_masked, dim=-1)
-
-        # 4. Reorder the image features using the same sort order from the masks.
-        #    sort_indices has shape [B, M, D]. We use it to gather along the D dimension.
-        sorted_features = torch.gather(
-            image_features_expanded,
-            2,
-            sort_indices.unsqueeze(-1).expand(batch_size, M, ve_dim, F),
-        )
-        # Now, for each [B, M] pair, the first counts[b, m] rows are from the True positions in order.
-
-        # 5. Slice the image_features to keep only up to max_count rows along the D (now position) dimension.
-        selected_features = sorted_features[
-            :, :, : self.max_count, :
-        ]  # shape: [B, M, max_count, F]
-
-        # 6. Create a mask to zero out any “padding” positions:
-        #    For each [B, M] pair, we know how many valid rows there are (counts[b, m]).
-        #    Create a positions index for the new (padded) dimension.
-        positions = (
-            torch.arange(self.max_count, device=images_features.device)
-            .view(1, 1, self.max_count)
-            .expand(batch_size, M, self.max_count)
-        )
-        valid_mask = positions < counts.unsqueeze(-1)  # shape: [B, M, max_count]
-        # Finally Apply the valid_mask along the feature dimension.
-        no_tokens_features = selected_features * valid_mask.unsqueeze(-1).float()
-        return no_tokens_features
-
-    def add_visual_tokens(self, no_tokens_features):
-        batch_size, M, y, F = no_tokens_features.shape
-
-        if hasattr(self.get_model, "mm_bom_mask_token"):
-            bom_token_expanded = (
-                self.get_model.mm_bom_mask_token.mm_bom_mask_token.unsqueeze(
-                    0
-                ).unsqueeze(0)
-            )  # shape: [1, 1, 1, F]
-            bom_tokens = bom_token_expanded.expand(
-                batch_size, M, 1, F
-            )  # shape: [B, M, 1, F]
-        else:
-            bom_token_expanded = (
-                self.model.mm_bom_mask_token.mm_bom_mask_token.unsqueeze(0).unsqueeze(0)
-            )  # shape: [1, 1, 1, F]
-            bom_tokens = bom_token_expanded.expand(
-                batch_size, M, 1, F
-            )  # shape: [B, M, 1, F]
-
-        # Now prepend the BOM tokens along the sequence (3rd) dimension.
-        final_features_with_bom = torch.cat([bom_tokens, no_tokens_features], dim=2)
-        # Reshape to combine the mask and sequence dimensions:
-        final_features = final_features_with_bom.reshape(
-            batch_size, M * (1 + self.max_count), F
-        )
-        # result now has shape [B, M * (1 + max_count), F]
-        return final_features
-
-    def forward(self, images, masks):
-        """
-        Passes images through Vision Encoder and applies masks to the image features along with special tokens signaling the masked feature start/end.
-
-        Parameters:
-            images (torch.Tensor): Tensor of shape (batch_size, channels, image_height, image_width) preprocessed and ready for Vision Encoder.
-            masks (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
-                                        the inner Tensors are of size (n. of masks, (image_h, image_w)).
-
-        Returns:
-            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
-        """
-
-        # Get shape information from images
-        self.image_h, self.image_w = int(images.shape[2]), int(images.shape[3])
-
-        ## Pass images through vision_encoder
-        images_features = self.vision_encoder(images)
-
-        ## Downsample masks
-        downsampled_masks = self.downsample_masks(images_features, masks)
-
-        ## Apply Downsampled masks to image features
-        no_tokens_features = self.apply_masks(images_features, downsampled_masks)
-
-        ## Add bom tokens
-        if self.no_masktoken:
-            return no_tokens_features.view(
-                no_tokens_features.size(0), -1, no_tokens_features.size(3)
-            )
-        else:
-            final_features = self.add_visual_tokens(no_tokens_features)
-            return final_features
-
-
 class MaskEmbedder(torch.nn.Module):
 
     def __init__(
@@ -462,17 +214,6 @@ class MaskEmbedder(torch.nn.Module):
         get_model,
         config,
         vision_tower,
-        global_view=False,
-        averaging=False,
-        mask_removing=False,
-        mask_limiting=False,
-        mask_limit=20,
-        averaging_global_view=False,
-        no_masktoken=False,
-        use_sliding_window=False,
-        use_dummy_masks=False,
-        number_of_masks=10,
-        image_filling=False,
     ):
         super(MaskEmbedder, self).__init__()
 
@@ -482,22 +223,35 @@ class MaskEmbedder(torch.nn.Module):
         self.config = config
         self.vision_encoder = vision_tower
 
-        # bool values
-        self.global_view = global_view
-        self.mask_removing = mask_removing
-        self.averaging = averaging
-        self.mask_limiting = mask_limiting
-        self.averaging_global_view = averaging_global_view
-        self.no_masktoken = no_masktoken
-
-        # bool values for ablations
-        self.use_sliding_window = use_sliding_window
-        self.use_dummy_masks = use_dummy_masks
-        self.number_of_masks = number_of_masks
-
-        # other
-        self.mask_limit = mask_limit
-        self.image_filling = image_filling
+        # Init absolute positional encoding
+        if self.model.absolute_positional_encoding:
+            ve_dim = (
+                int(
+                    self.vision_encoder.vision_tower.vision_model.embeddings.position_embedding.num_embeddings
+                )
+                - 1
+            )
+            feature_dim = self.config.mm_hidden_size
+            pe = torch.zeros(ve_dim, feature_dim)
+            position = torch.arange(ve_dim, dtype=torch.float).unsqueeze(1)  # [576,1]
+            div_term = torch.exp(
+                torch.arange(0, feature_dim, 2, dtype=torch.float)
+                * -(math.log(10000.0) / feature_dim)
+            )  # [512]
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            # register as buffer so it moves with the module, but isn't a learnable param
+            self.register_buffer("abs_pos_embed", pe)  # shape [576,1024]
+        if self.model.learnable_positional_encoding:
+            ve_dim = (
+                int(
+                    self.vision_encoder.vision_tower.vision_model.embeddings.position_embedding.num_embeddings
+                )
+                - 1
+            )
+            feature_dim = self.config.mm_hidden_size
+            self.learn_pos_embed = nn.Embedding(ve_dim, feature_dim)
+            nn.init.trunc_normal_(self.learn_pos_embed.weight, std=0.02)
 
     @property
     def dtype(self):
@@ -507,244 +261,196 @@ class MaskEmbedder(torch.nn.Module):
     def device(self):
         return self.vision_encoder.device
 
-    def apply_masks_with_tokens(self, images_batch, masks_batch):
+    def _compute_batch_ranges(
+        self,
+        masked_features: List[torch.Tensor],
+        image_features: torch.Tensor,
+        mm_bom_mask_token: torch.Tensor,
+    ) -> List[Tuple[int, int]]:
         """
-        Applies masks to the image features and appends special tokens signaling the masked feature start/end.
+        Reconstruct the same grouping you used in your .cat(...) logic,
+        then compute start/end offsets along dim=0.
 
-        Parameters:
-            images_batch (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
-            masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
-                                        the inner Tensors are of size (n. of masks, (image_h, image_w)).
-
-        Returns:
-            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+        Returns e.g. [(0,100), (100,200), …].
         """
 
-        batch_size = images_batch.shape[0]
-        # print("images_batch", images_batch)
+        groups = []
 
-        batched_features = []
-        zero_indices = []
-        for i, (image_features, image_masks) in enumerate(
-            zip(images_batch, masks_batch)
+        # 1) the “global view” chunk (if any)
+        if self.model.global_view and not self.model.no_masktoken:
+            if not self.model.averaging_global_view:
+                # whole image_features as one chunk
+                groups.append([image_features])
+            else:
+                # mean-pooled image_features as one chunk
+                avg = image_features.mean(dim=0, keepdim=True)  # shape (1, D)
+                groups.append([avg])
+
+        # 2) each mask → possibly prefixed by its mask_token
+        for feat in masked_features:
+            if not self.model.no_masktoken:
+                # [token, feat] is one chunk
+                token = mm_bom_mask_token.to(feat.device).unsqueeze(
+                    0
+                )  # ensure shape (1,D)
+                groups.append([token, feat])
+            else:
+                # just the feat
+                groups.append([feat])
+
+        # 3) now sum up lengths per chunk
+        lengths = [sum(t.size(0) for t in chunk) for chunk in groups]
+        ends = list(itertools.accumulate(lengths))
+        starts = [0] + ends[:-1]
+
+        return list(zip(starts, ends))
+
+    def _apply_bom_tokens(self, image_features, masked_features, ve_dim, feature_dim):
+        """
+        Applying begnining of mask tokens to masked features.
+        """
+        ##appending whole image feature at the beginning of the masks features
+
+        if (
+            self.model.global_view
+            and not self.model.averaging_global_view
+            and not self.model.no_masktoken
         ):
-
-            # Get image features shape (batch_size, ve_dim, feature_dim)
-            ve_dim, feature_dim = image_features.shape
-            # torch.set_printoptions(threshold=image_masks[0].numel())
-
-            if self.use_sliding_window:
-                resized_image_masks = create_sliding_masks(
-                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
-                )
-            elif self.use_dummy_masks:
-                resized_image_masks = create_deterministic_dummy_masks(
-                    ve_dim, device=image_features.device, num_masks=self.number_of_masks
-                )
-            else:
-                resized_image_masks = [
-                    downsample_mask_to_1d_counts(mask, ve_dim).to(image_features.device)
-                    for mask in image_masks
-                ]
-
-            # for j, t in enumerate(resized_image_masks):
-            #     if t.count_nonzero().item() == 0:
-            #         zero_indices.append(j)
-            # zero_indices = []
-
-            # print("resized_image_masks[0]", resized_image_masks[1])
-            # print("resized_image_masks[0]", resized_image_masks[2])
-
-            # image_features = image_features.to(image_features.device)
-            # resized_image_masks = [
-            #     m.to(image_features.device) for m in resized_image_masks
-            # ]
-            image_features = image_features.contiguous()
-            resized_image_masks = [m.contiguous() for m in resized_image_masks]
-
-            if self.mask_removing and len(resized_image_masks) > self.mask_limit:
-                masked_features = []
-            elif self.mask_limiting and len(resized_image_masks) > self.mask_limit:
-                resized_image_masks = list(resized_image_masks)
-                masked_features = [
-                    image_features[mask]
-                    for mask in resized_image_masks[: self.mask_limit]
-                ]
-            elif self.image_filling:
-                image_features = image_features.to(device)
-                resized_image_masks_new = list(resized_image_masks)
-                for m in resized_image_masks_new:
-                    assert (
-                        m.device == image_features.device
-                    ), f"mask device {m.device} doesn't match features {image_features.device}"
-                    assert (
-                        m.dtype == torch.bool
-                    ), f"mask dtype {m.dtype} doesn't match features {torch.bool}"
-                    assert (
-                        m.shape[0] == image_features.shape[0]
-                    ), f"mask shape {m.shape} doesn't match features {image_features.shape}"
-
-                covered = (
-                    torch.stack(resized_image_masks_new, dim=0)
-                    .any(dim=0)
-                    .to(image_features.device)
-                )
-
-                # 2) invert to get the “uncovered” positions
-                uncovered = ~covered
-                uncovered = uncovered.to(image_features.device)
-
-                # 3) if there really is anything uncovered, append it
-                if uncovered.any().item() > 0:
-                    resized_image_masks_new.append(uncovered)
-
-                # 4) now apply all masks (including the dummy one) to extract features
-                masked_features = [
-                    image_features[mask] for mask in resized_image_masks_new
-                ]
-            # find /mnt/nushare2/data/mnulli/thesis/data/sam2/cambrian_segmentation_data/arrays/partition_6 -mindepth 2 -type d -iname '*.jpg' -printf '%P\n' | cut -d/ -f1 | sort | uniq -c | awk '{print $2 ": " $1}'
-            else:
-                masked_features = [image_features[mask] for mask in resized_image_masks]
-
-            if self.averaging:
-                masked_features = [
-                    torch.mean(mask_feat, dim=0).reshape(1, feature_dim)
-                    for mask_feat in masked_features
-                ]  # averaging across 576 --> (bs, feature_dim)
-            ##appending whole image feature at the beginning of the masks features
-            if (
-                self.global_view
-                and not self.averaging_global_view
-                and not self.no_masktoken
-            ):
-                if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
-                    masked_with_tokens = torch.cat(
-                        [image_features]
-                        + [
-                            item
-                            for mask_feat in masked_features
-                            for item in [
-                                self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                    image_features.device
-                                ),
-                                mask_feat,
-                            ]
-                        ],
-                        dim=0,
-                    )
-                else:  # during inference
-                    masked_with_tokens = torch.cat(
-                        [image_features]
-                        + [
-                            item
-                            for mask_feat in masked_features
-                            for item in [
-                                self.model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                    image_features.device
-                                ),
-                                mask_feat,
-                            ]
-                        ],
-                        dim=0,
-                    )
-            elif (
-                self.global_view
-                and self.averaging_global_view
-                and not self.no_masktoken
-            ):
-                if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
-                    masked_with_tokens = torch.cat(
-                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
-                        + [
-                            item
-                            for mask_feat in masked_features
-                            for item in [
-                                self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                    image_features.device
-                                ),
-                                mask_feat,
-                            ]
-                        ],
-                        dim=0,
-                    )
-
-                else:  # during inference
-                    masked_with_tokens = torch.cat(
-                        [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
-                        + [
-                            item
-                            for mask_feat in masked_features
-                            for item in [
-                                self.model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                    image_features.device
-                                ),
-                                mask_feat,
-                            ]
-                        ],
-                        dim=0,
-                    )
-
-            elif (
-                self.global_view
-                and not self.averaging_global_view
-                and self.no_masktoken
-            ):
+            if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
                 masked_with_tokens = torch.cat(
-                    [image_features] + [mask_feat for mask_feat in masked_features],
+                    [image_features]
+                    + [
+                        item
+                        for mask_feat in masked_features
+                        for item in [
+                            self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                image_features.device
+                            ),
+                            mask_feat,
+                        ]
+                    ],
                     dim=0,
                 )
-            elif (
-                not self.global_view
-                and not self.averaging_global_view
-                and self.no_masktoken
-            ):
+            else:  # during inference
                 masked_with_tokens = torch.cat(
-                    [mask_feat for mask_feat in masked_features], dim=0
+                    [image_features]
+                    + [
+                        item
+                        for mask_feat in masked_features
+                        for item in [
+                            self.model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                image_features.device
+                            ),
+                            mask_feat,
+                        ]
+                    ],
+                    dim=0,
                 )
-            elif self.global_view and self.averaging_global_view and self.no_masktoken:
+        elif (
+            self.model.global_view
+            and self.model.averaging_global_view
+            and not self.model.no_masktoken
+        ):
+            if hasattr(self.get_model, "mm_bom_mask_token"):  # during training
                 masked_with_tokens = torch.cat(
                     [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
-                    + [mask_feat for mask_feat in masked_features],
+                    + [
+                        item
+                        for mask_feat in masked_features
+                        for item in [
+                            self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                image_features.device
+                            ),
+                            mask_feat,
+                        ]
+                    ],
                     dim=0,
                 )
 
-            else:
-                if hasattr(self.get_model, "mm_bom_mask_token"):
-                    masked_with_tokens = torch.cat(
-                        [
-                            torch.cat(
-                                [
-                                    self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                        image_features.device
-                                    ),
-                                    mask_feat,
-                                ],
-                                dim=0,
-                            )
-                            for mask_feat in masked_features
-                        ],
-                        dim=0,
-                    )
-                else:
-                    masked_with_tokens = torch.cat(
-                        [
-                            torch.cat(
-                                [
-                                    self.model.mm_bom_mask_token.mm_bom_mask_token.to(
-                                        image_features.device
-                                    ),
-                                    mask_feat,
-                                ],
-                                dim=0,
-                            )
-                            for mask_feat in masked_features
-                        ],
-                        dim=0,
-                    )
-            # Shape (bs, (1 + n) * 576 + 2n, 1024)
-            batched_features.append(masked_with_tokens.to(image_features.device))
+            else:  # during inference
+                masked_with_tokens = torch.cat(
+                    [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                    + [
+                        item
+                        for mask_feat in masked_features
+                        for item in [
+                            self.model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                image_features.device
+                            ),
+                            mask_feat,
+                        ]
+                    ],
+                    dim=0,
+                )
 
-        padding = True
+        elif (
+            self.model.global_view
+            and not self.model.averaging_global_view
+            and self.model.no_masktoken
+        ):
+            masked_with_tokens = torch.cat(
+                [image_features] + [mask_feat for mask_feat in masked_features],
+                dim=0,
+            )
+        elif (
+            not self.model.global_view
+            and not self.model.averaging_global_view
+            and self.model.no_masktoken
+        ):
+            masked_with_tokens = torch.cat(
+                [mask_feat for mask_feat in masked_features], dim=0
+            )
+        elif (
+            self.model.global_view
+            and self.model.averaging_global_view
+            and self.model.no_masktoken
+        ):
+            masked_with_tokens = torch.cat(
+                [torch.mean(image_features, dim=0).reshape(1, feature_dim)]
+                + [mask_feat for mask_feat in masked_features],
+                dim=0,
+            )
+
+        else:
+            if hasattr(self.get_model, "mm_bom_mask_token"):
+                masked_with_tokens = torch.cat(
+                    [
+                        torch.cat(
+                            [
+                                self.get_model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ],
+                            dim=0,
+                        )
+                        for mask_feat in masked_features
+                    ],
+                    dim=0,
+                )
+            else:
+                masked_with_tokens = torch.cat(
+                    [
+                        torch.cat(
+                            [
+                                self.model.mm_bom_mask_token.mm_bom_mask_token.to(
+                                    image_features.device
+                                ),
+                                mask_feat,
+                            ],
+                            dim=0,
+                        )
+                        for mask_feat in masked_features
+                    ],
+                    dim=0,
+                )
+
+        return masked_with_tokens
+
+    def _pad_batched_feat(self, image_features, batched_features, padding=True):
+        """
+        Applying padding to masked torch sequence.
+        """
         if padding:
             # Find max dimension size
             max_dim_size = max(features.shape[0] for features in batched_features)
@@ -763,31 +469,432 @@ class MaskEmbedder(torch.nn.Module):
                     dim=0,
                 )
                 padded_features.append(padded)
+        else:
+            padded_features = batched_features
 
-            batched_features = padded_features
+        return padded_features
+
+    def _apply_masks_with_tokens(self, images_batch, masks_batch):
+        """
+        Applies masks to the image features and appends special tokens signaling the masked feature start/end.
+
+        Parameters:
+            images_batch (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
+            masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
+                                        the inner Tensors are of size (n. of masks, (image_h, image_w)).
+
+        Returns:
+            torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+        """
+
+        batch_size = images_batch.shape[0]
+        # print("images_batch", images_batch)
+        batched_features = []
+        batch_ranges = []
+        for i, (image_features, image_masks) in enumerate(
+            zip(images_batch, masks_batch)
+        ):
+
+            # Get image features shape (batch_size, ve_dim, feature_dim)
+            ve_dim, feature_dim = image_features.shape
+
+            ## for indexing masks operation pass them to cpu
+            passing_device = "cpu"
+            image_masks = image_masks.to(passing_device)
+            if self.model.use_sliding_window:
+                resized_image_masks = create_sliding_masks(
+                    ve_dim, device=passing_device, num_masks=self.model.number_of_masks
+                )
+            elif self.model.use_dummy_masks:
+                resized_image_masks = create_deterministic_dummy_masks(
+                    ve_dim, device=passing_device, num_masks=self.model.number_of_masks
+                )
+            else:
+                resized_image_masks = [
+                    downsample_mask_to_1d_counts(mask, ve_dim, device=passing_device)
+                    for mask in image_masks
+                ]
+
+            if (
+                self.model.mask_removing
+                and len(resized_image_masks) > self.model.mask_limit
+            ):
+                raise NotImplementedError("Not yet implemented feature")
+
+            elif (
+                self.model.mask_limiting
+                and len(resized_image_masks) > self.model.mask_limit
+            ):
+                # checking consistency between masks and image_features and that all resized masks are valid (i.e. all have at least one true value) and passing to cuda
+                resized_image_masks = check_resised_image_masks(
+                    resized_image_masks, image_features, device=image_features.device
+                )
+                masked_features = [
+                    image_features[mask]
+                    for mask in resized_image_masks[: self.mask_limit]
+                ]
+            elif self.model.image_filling:
+
+                # 1) check for areas of the feature space which are not covered by the masks
+                covered = torch.stack(resized_image_masks, dim=0).any(dim=0).to("cpu")
+
+                # 2) invert to get the “uncovered” positions
+                uncovered = ~covered
+
+                # 3) if there really is anything uncovered, append it
+                if uncovered.any().item() > 0:
+                    resized_image_masks.append(uncovered)
+
+                # 4) checking consistency between masks and image_features and that all resized masks are valid (i.e. all have at least one true value) and passing to cuda
+                resized_image_masks = check_resised_image_masks(
+                    resized_image_masks, image_features, device=image_features.device
+                )
+
+                # 5) now apply all masks (including the dummy one) to extract features
+                masked_features = [image_features[mask] for mask in resized_image_masks]
+            else:
+                # checking consistency between masks and image_features and that all resized masks are valid (i.e. all have at least one true value) and passing to cuda
+                resized_image_masks = check_resised_image_masks(
+                    resized_image_masks, image_features, device=image_features.device
+                )
+                if getattr(self.model, "absolute_positional_encoding", False):
+                    self.abs_pos_embed = self.abs_pos_embed.to(image_features.device)
+                    masked_features = [
+                        image_features[mask] + self.abs_pos_embed[mask]
+                        for mask in resized_image_masks
+                    ]
+
+                elif getattr(self.model, "learnable_positional_encoding", False):
+                    self.learn_pos_embed = self.learn_pos_embed.to(
+                        image_features.device
+                    )
+
+                    masked_features = [
+                        image_features[mask]
+                        + self.learn_pos_embed(mask.nonzero(as_tuple=True)[0])
+                        for mask in resized_image_masks
+                    ]
+                else:
+                    masked_features = [
+                        image_features[mask] for mask in resized_image_masks
+                    ]
+
+            if self.model.averaging:
+                masked_features = [
+                    torch.mean(mask_feat, dim=0).reshape(1, feature_dim)
+                    for mask_feat in masked_features
+                ]  # averaging across 576 --> (bs, feature_dim)
+
+            masked_with_tokens = self._apply_bom_tokens(
+                image_features, masked_features, ve_dim, feature_dim
+            )
+
+            if getattr(self.get_model, "custom_rotary_embedding", False):
+                batch_ranges_single_image = self._compute_batch_ranges(
+                    masked_features=masked_features,
+                    image_features=image_features,
+                    mm_bom_mask_token=(
+                        self.get_model.mm_bom_mask_token
+                        if hasattr(self.get_model, "mm_bom_mask_token")
+                        else self.model.mm_bom_mask_token
+                    ).mm_bom_mask_token,
+                )
+                batch_ranges.append(batch_ranges_single_image)
+            else:
+                batch_ranges = []
+            # Shape (bs, (1 + n) * 576 + 2n, 1024)
+            batched_features.append(masked_with_tokens.to(image_features.device))
+
+        padding = True
+        if padding:
+            batched_features = self._pad_batched_feat(
+                image_features, batched_features, padding
+            )
 
         final_output = torch.stack(batched_features).to(images_batch.device)
 
-        return final_output, zero_indices
+        return final_output, batch_ranges
 
-    def forward(self, images, masks):
+    def forward(self, image_features, masks):
         """
-        Passes images through Vision Encoder and applies masks to the image features along with special tokens signaling the masked feature start/end.
+        Passes images through masks application process to the image features.
 
         Parameters:
-            images (torch.Tensor): Tensor of shape (batch_size, channels, image_height, image_width) preprocessed and ready for Vision Encoder.
+            image_features (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) outputted from Vision Encoder.
             masks (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
                                         the inner Tensors are of size (n. of masks, (image_h, image_w)).
 
         Returns:
             torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
         """
-        ## pass images through vision encoder
-        images_features = self.vision_encoder(images)
-
         ## apply masks with bom tokens
-        output_features, zero_indices = self.apply_masks_with_tokens(
-            images_features, masks
+        output_features, batch_ranges = self._apply_masks_with_tokens(
+            image_features, masks
         )
 
-        return output_features, zero_indices
+        return output_features, batch_ranges
+
+
+# class BatchedMaskEmbedder(torch.nn.Module):
+
+#     def __init__(
+#         self,
+#         model,
+#         get_model,
+#         config,
+#         vision_tower,
+#         global_view=False,
+#         averaging=False,
+#         mask_removing=False,
+#         mask_limiting=False,
+#         mask_limit=20,
+#         averaging_global_view=False,
+#         no_masktoken=False,
+#         use_sliding_window=False,
+#         use_dummy_masks=False,
+#         number_of_masks=10,
+#     ):
+#         super(BatchedMaskEmbedder, self).__init__()
+
+#         # objects
+#         self.model = model
+#         self.get_model = get_model
+#         self.config = config
+#         self.vision_encoder = vision_tower
+
+#         # bool values
+#         self.global_view = global_view
+#         self.mask_removing = mask_removing
+#         self.averaging = averaging
+#         self.mask_limiting = mask_limiting
+#         self.averaging_global_view = averaging_global_view
+#         self.no_masktoken = no_masktoken
+
+#         # bool values for ablations
+#         self.use_sliding_window = use_sliding_window
+#         self.use_dummy_masks = use_dummy_masks
+#         self.number_of_masks = number_of_masks
+
+#         # other
+#         self.mask_limit = mask_limit
+
+#     @property
+#     def dtype(self):
+#         return self.vision_encoder.dtype
+
+#     @property
+#     def device(self):
+#         return self.vision_encoder.device
+
+#     def downsample_masks(
+#         self,
+#         images_features,
+#         masks_batch,
+#     ):
+#         """
+#         Applies masks to the image features and appends special tokens signaling the masked feature start/end.
+
+#         Parameters:
+#             images_features (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
+#             masks_batch (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
+#                                         the inner Tensors are of size (n. of masks, (image_h, image_w)).
+
+#         Returns:
+#             torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+#         """
+
+#         batch_size, ve_dim, feature_dim = images_features.shape
+#         # Create a tensor by padding masks_batch
+#         # Step 1: Determine the target shape for each dimension
+#         target_nummasks = max(mask.shape[0] for mask in masks_batch)
+#         target_height, target_width = self.image_h, self.image_w
+#         # Step 2: Pad each mask to the target shape
+#         padded_masks = [
+#             adjust_tensor_size(mask, target_nummasks, target_height, target_width)
+#             for mask in masks_batch
+#         ]
+#         masks_batch = torch.stack(padded_masks)
+
+#         if self.use_sliding_window:
+#             resized_image_masks = torch.stack(
+#                 [
+#                     torch.tensor(
+#                         create_sliding_masks(
+#                             ve_dim,
+#                             device=images_features.device,
+#                             num_masks=self.number_of_masks,
+#                         )
+#                     )
+#                     for i in range(batch_size)
+#                 ]
+#             ).to(images_features.device)
+#         elif self.use_dummy_masks:
+#             resized_image_masks = torch.stack(
+#                 [
+#                     torch.tensor(
+#                         create_deterministic_dummy_masks(
+#                             ve_dim,
+#                             device=images_features.device,
+#                             num_masks=self.number_of_masks,
+#                         )
+#                     )
+#                     for i in range(batch_size)
+#                 ]
+#             ).to(images_features.device)
+#         else:
+#             resized_image_masks = torch.stack(
+#                 [
+#                     downsample_mask_to_1d_counts(
+#                         mask, ve_dim, device=images_features.device
+#                     ).to(images_features.device)
+#                     for image_masks in masks_batch
+#                     for mask in image_masks
+#                 ]
+#             )
+#             resized_image_masks = resized_image_masks.view(
+#                 batch_size, target_nummasks, -1
+#             ).to(images_features.device)
+
+#         return resized_image_masks
+
+#     def apply_masks(self, images_features, resized_image_masks):
+#         """
+#         Applies masks to the image features.
+
+#         Parameters:
+#             images_features (torch.Tensor): Tensor of shape (batch_size, vision_encoder_dim, feature_dim) from Vision Encoder embeddings.
+#             resized_image_masks (torch.Tensor): Tensor of shape (batch_size, M, vision_encoder_dim). M is the maximum number of masks across the batch.
+
+#         Returns:
+#             torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, M, y, feature_dim), where y varies based on the method / number of masks for each image and number of True values per mask.
+#         """
+#         if self.global_view:
+#             ## include a mask which is f
+#             whole_image_mask = torch.ones(
+#                 (batch_size, 1, ve_dim),
+#                 dtype=resized_image_masks.dtype,
+#                 device=resized_image_masks.device,
+#             )
+#             resized_image_masks = torch.cat(
+#                 [whole_image_mask, resized_image_masks], dim=1
+#             )
+
+#         batch_size, M, ve_dim = tuple(resized_image_masks.shape)
+#         F = images_features.shape[-1]  # aka feature_dim
+
+#         # 1. Count the number of True entries per [B, M] and find the maximum count.
+#         counts = resized_image_masks.sum(dim=-1)  # shape: [B, M]
+#         self.max_count = int(
+#             counts.max().item()
+#         )  # scalar (largest number of True values)
+
+#         # 2. Expand images_features so that each mask sees [ve_dim, F]:
+#         #    From [B, ve_dim, F] --> [B, 1, ve_dim, F] and then expand to [B, M, ve_dim, F]
+#         image_features_expanded = images_features.unsqueeze(1).expand(
+#             batch_size, M, ve_dim, F
+#         )
+
+#         # 3. Compute an ordering index for the D-dimension that preserves original order.
+#         #    Create an index tensor for positions 0...D-1.
+#         order = (
+#             torch.arange(ve_dim, device=images_features.device)
+#             .view(1, 1, ve_dim)
+#             .expand(batch_size, M, ve_dim)
+#         )
+#         # For positions where the mask is False, substitute a large value (here, D).
+#         order_masked = torch.where(
+#             resized_image_masks, order, torch.full_like(order, ve_dim)
+#         )
+#         # When you sort order_masked along the D dimension (ascending), the True indices (with
+#         # their original order) will appear first and the False ones will be pushed to the end.
+#         _, sort_indices = torch.sort(order_masked, dim=-1)
+
+#         # 4. Reorder the image features using the same sort order from the masks.
+#         #    sort_indices has shape [B, M, D]. We use it to gather along the D dimension.
+#         sorted_features = torch.gather(
+#             image_features_expanded,
+#             2,
+#             sort_indices.unsqueeze(-1).expand(batch_size, M, ve_dim, F),
+#         )
+#         # Now, for each [B, M] pair, the first counts[b, m] rows are from the True positions in order.
+
+#         # 5. Slice the image_features to keep only up to max_count rows along the D (now position) dimension.
+#         selected_features = sorted_features[
+#             :, :, : self.max_count, :
+#         ]  # shape: [B, M, max_count, F]
+
+#         # 6. Create a mask to zero out any “padding” positions:
+#         #    For each [B, M] pair, we know how many valid rows there are (counts[b, m]).
+#         #    Create a positions index for the new (padded) dimension.
+#         positions = (
+#             torch.arange(self.max_count, device=images_features.device)
+#             .view(1, 1, self.max_count)
+#             .expand(batch_size, M, self.max_count)
+#         )
+#         valid_mask = positions < counts.unsqueeze(-1)  # shape: [B, M, max_count]
+#         # Finally Apply the valid_mask along the feature dimension.
+#         no_tokens_features = selected_features * valid_mask.unsqueeze(-1).float()
+#         return no_tokens_features
+
+#     def add_visual_tokens(self, no_tokens_features):
+#         batch_size, M, y, F = no_tokens_features.shape
+
+#         if hasattr(self.get_model, "mm_bom_mask_token"):
+#             bom_token_expanded = (
+#                 self.get_model.mm_bom_mask_token.mm_bom_mask_token.unsqueeze(
+#                     0
+#                 ).unsqueeze(0)
+#             )  # shape: [1, 1, 1, F]
+#             bom_tokens = bom_token_expanded.expand(
+#                 batch_size, M, 1, F
+#             )  # shape: [B, M, 1, F]
+#         else:
+#             bom_token_expanded = (
+#                 self.model.mm_bom_mask_token.mm_bom_mask_token.unsqueeze(0).unsqueeze(0)
+#             )  # shape: [1, 1, 1, F]
+#             bom_tokens = bom_token_expanded.expand(
+#                 batch_size, M, 1, F
+#             )  # shape: [B, M, 1, F]
+
+#         # Now prepend the BOM tokens along the sequence (3rd) dimension.
+#         final_features_with_bom = torch.cat([bom_tokens, no_tokens_features], dim=2)
+#         # Reshape to combine the mask and sequence dimensions:
+#         final_features = final_features_with_bom.reshape(
+#             batch_size, M * (1 + self.max_count), F
+#         )
+#         # result now has shape [B, M * (1 + max_count), F]
+#         return final_features
+
+#     def forward(self, images, masks):
+#         """
+#         Passes images through Vision Encoder and applies masks to the image features along with special tokens signaling the masked feature start/end.
+
+#         Parameters:
+#             images (torch.Tensor): Tensor of shape (batch_size, channels, image_height, image_width) preprocessed and ready for Vision Encoder.
+#             masks (List[torch.LongTensor]): List of Tensors. The Outer list if of length batch_size length,
+#                                         the inner Tensors are of size (n. of masks, (image_h, image_w)).
+
+#         Returns:
+#             torch.Tensor: Tensor with the masked features across the batch. Shape should be (batch_size, x, feature_dim), where x varies based on the method / number of masks for each image.
+#         """
+
+#         # Get shape information from images
+#         self.image_h, self.image_w = int(images.shape[2]), int(images.shape[3])
+
+#         ## Pass images through vision_encoder
+#         images_features = self.vision_encoder(images)
+
+#         ## Downsample masks
+#         downsampled_masks = self.downsample_masks(images_features, masks)
+
+#         ## Apply Downsampled masks to image features
+#         no_tokens_features = self.apply_masks(images_features, downsampled_masks)
+
+#         ## Add bom tokens
+#         if self.no_masktoken:
+#             return no_tokens_features.view(
+#                 no_tokens_features.size(0), -1, no_tokens_features.size(3)
+#             )
+#         else:
+#             final_features = self.add_visual_tokens(no_tokens_features)
+#             return final_features
